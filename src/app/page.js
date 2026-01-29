@@ -36,12 +36,11 @@ export default function Home() {
   const [isManageMode, setIsManageMode] = useState(false);
   const [selectedImageIds, setSelectedImageIds] = useState([]);
 
-  // 新增：历史拉取（来自 D1 img_log / list API）
+  // 历史拉取
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyCursor, setHistoryCursor] = useState(null);
   const [historyHasMore, setHistoryHasMore] = useState(true);
 
-  // 为待上传队列创建预览 URL，并在变更/卸载时统一回收，避免内存泄漏
   const previewItems = useMemo(() => {
     return selectedFiles.map((file) => ({
       file,
@@ -83,7 +82,6 @@ export default function Home() {
     }
   };
 
-  // 初始化鉴权与统计数据
   useEffect(() => {
     const initData = async () => {
       try {
@@ -123,7 +121,6 @@ export default function Home() {
     initData();
   }, []);
 
-  // 截图粘贴监听
   useEffect(() => {
     const onPaste = (e) => {
       const items = e.clipboardData?.items || [];
@@ -147,7 +144,6 @@ export default function Home() {
     return () => window.removeEventListener("paste", onPaste);
   }, []);
 
-  // 新增：拉取历史（需要后端提供 /api/enableauthapi/list）
   const fetchHistory = async ({ reset = false } = {}) => {
     if (!isAuthapi || role !== "admin") return;
     if (historyLoading) return;
@@ -178,14 +174,12 @@ export default function Home() {
       setHistoryCursor(data.nextCursor || null);
       setHistoryHasMore(Boolean(data.nextCursor));
     } catch (e) {
-      // 不打断首页，只提示
       toast.warn("历史库拉取失败（若未创建 list 接口可忽略）");
     } finally {
       setHistoryLoading(false);
     }
   };
 
-  // admin 登录后自动拉一次历史
   useEffect(() => {
     if (isAuthapi && role === "admin") {
       fetchHistory({ reset: true });
@@ -246,7 +240,6 @@ export default function Home() {
 
     setUploading(false);
 
-    // 上传后刷新历史库（若 list 接口已启用）
     if (isAuthapi && role === "admin") {
       fetchHistory({ reset: true });
     }
@@ -315,11 +308,13 @@ export default function Home() {
         <div className="flex items-center">
           {isAuthapi && role === "admin" && (
             <>
-              <Link href="/manage">
-                <button className="px-4 py-2 mx-2 bg-slate-100 text-slate-700 rounded-xl font-medium shadow-sm hover:bg-slate-200 transition">
-                  管理库
-                </button>
-              </Link>
+              {/* 修复：不要跳 /manage（你没创建该页面，会 404）。改成仅提示 */}
+              <button
+                onClick={() => toast.info("管理功能已集成在首页：开启“批量管理模式”即可")}
+                className="px-4 py-2 mx-2 bg-slate-100 text-slate-700 rounded-xl font-medium shadow-sm hover:bg-slate-200 transition"
+              >
+                管理库
+              </button>
               <button
                 onClick={() => fetchHistory({ reset: true })}
                 className="px-4 py-2 mx-2 bg-slate-100 text-slate-700 rounded-xl font-medium shadow-sm hover:bg-slate-200 transition"
