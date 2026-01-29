@@ -1,3 +1,4 @@
+// 文件：src/app/manage/page.jsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -101,9 +102,7 @@ export default function ManagePage() {
   };
 
   useEffect(() => {
-    if (authed && role === "admin") {
-      fetchList({ reset: true });
-    }
+    if (authed && role === "admin") fetchList({ reset: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed, role]);
 
@@ -147,9 +146,7 @@ export default function ManagePage() {
   }, [items, date, q]);
 
   const toggleSelect = (id) => {
-    setSelectedIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    );
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
 
   const selectAllFiltered = () => {
@@ -204,16 +201,10 @@ export default function ManagePage() {
           <h1 className="text-xl font-black text-slate-800">管理后台</h1>
           <p className="text-xs text-slate-400 mt-2">请先登录管理员账号</p>
           <div className="mt-6 flex gap-2">
-            <Link
-              href="/login"
-              className="flex-1 text-center bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 transition"
-            >
+            <Link href="/login" className="flex-1 text-center bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 transition">
               去登录
             </Link>
-            <Link
-              href="/"
-              className="flex-1 text-center bg-slate-100 text-slate-700 py-3 rounded-xl font-bold hover:bg-slate-200 transition"
-            >
+            <Link href="/" className="flex-1 text-center bg-slate-100 text-slate-700 py-3 rounded-xl font-bold hover:bg-slate-200 transition">
               回主页
             </Link>
           </div>
@@ -236,10 +227,7 @@ export default function ManagePage() {
             >
               退出登录
             </button>
-            <Link
-              href="/"
-              className="flex-1 text-center bg-slate-100 text-slate-700 py-3 rounded-xl font-bold hover:bg-slate-200 transition"
-            >
+            <Link href="/" className="flex-1 text-center bg-slate-100 text-slate-700 py-3 rounded-xl font-bold hover:bg-slate-200 transition">
               回主页
             </Link>
           </div>
@@ -340,13 +328,16 @@ export default function ManagePage() {
         <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map((x) => {
             const id = x.id || x.url;
-            const url = x.url;
             const filename = x.filename || id;
+
+            // 统一外链：/api/p/<filename>（无论 TG/R2）
+            const aliasUrl = `/api/p/${encodeURIComponent(filename)}`;
+
             const providerText = x.provider || "-";
             const timeText = fmtTime(x.created_at);
             const checked = selectedIds.includes(id);
             const opened = !!openMap[id];
-            const codes = makeCodes(url);
+            const codes = makeCodes(aliasUrl);
 
             return (
               <div key={id} className="bg-white border rounded-2xl shadow-sm overflow-hidden">
@@ -362,9 +353,9 @@ export default function ManagePage() {
                     />
                   </div>
 
-                  <a href={url} target="_blank" rel="noreferrer">
+                  <a href={aliasUrl} target="_blank" rel="noreferrer">
                     <img
-                      src={url}
+                      src={aliasUrl}
                       alt={filename}
                       className="w-full h-44 object-cover bg-slate-100"
                       loading="lazy"
@@ -378,23 +369,10 @@ export default function ManagePage() {
                     {providerText} · {timeText}
                   </div>
 
-                  <div className="mt-1 text-sm font-black text-slate-800 truncate">
-                    {filename}
-                  </div>
+                  <div className="mt-1 text-sm font-black text-slate-800 truncate">{filename}</div>
 
+                  {/* 只保留“展开外链”按钮（移除：复制链接 / 复制Markdown） */}
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <button
-                      onClick={() => copy(url)}
-                      className="px-3 py-1.5 rounded-xl bg-slate-100 border text-xs font-bold text-slate-700 hover:bg-slate-200 transition"
-                    >
-                      复制链接
-                    </button>
-                    <button
-                      onClick={() => copy(`![image](${url})`)}
-                      className="px-3 py-1.5 rounded-xl bg-slate-100 border text-xs font-bold text-slate-700 hover:bg-slate-200 transition"
-                    >
-                      复制Markdown
-                    </button>
                     <button
                       onClick={() => toggleOpen(id)}
                       className="px-3 py-1.5 rounded-xl bg-blue-600 text-white text-xs font-black hover:bg-blue-700 transition"
