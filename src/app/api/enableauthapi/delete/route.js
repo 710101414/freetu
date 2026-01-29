@@ -1,34 +1,30 @@
 export const runtime = "edge";
 import { getRequestContext } from "@cloudflare/next-on-pages";
 
-function sanitizeId(id) {
-  // id 存的是 tg file_id 或 r2 key（已被我们写入时净化过）
-  // 这里再净化一次，防止注入
-  return String(id || "")
-    .trim()
-    .replace(/'/g, "''")
-    .slice(0, 200);
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+  "Content-Type": "application/json",
+};
+
+export async function OPTIONS() {
+  return new Response(null, { status: 204, headers: corsHeaders });
 }
 
 export async function POST(request) {
   const { env } = getRequestContext();
 
-  const corsHeaders = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Content-Type": "application/json",
-  };
-
   if (!env.IMG) {
-    return new Response(JSON.stringify({ error: "数据库未绑定" }), {
+    return new Response(JSON.stringify({ error: "数据库未绑定(IMG)" }), {
       status: 500,
       headers: corsHeaders,
     });
   }
 
   try {
-    const { ids } = await request.json();
+    const body = await request.json();
+    const ids = body?.ids;
 
     if (!ids || !Array.isArray(ids) || ids.length === 0) {
       return new Response(JSON.stringify({ error: "未选择要删除的记录" }), {
@@ -37,23 +33,49 @@ export async function POST(request) {
       });
     }
 
-    // 兼容 D1：不用 bind，拼接 IN (...)
-    const safeIds = ids.map(sanitizeId).filter(Boolean);
-    if (safeIds.length === 0) {
-      return new Response(JSON.stringify({ error: "ids 无效" }), { status: 400, headers: corsHeaders });
+    // 1) 先查出这些记录（用于删 R2 对象）
+    const placeholders = ids.map(() => "?").join(",");
+    const rows = await env.IMG
+      .prepare(`SELECT id, url, provider FROM img_log WHERE id IN (${placeholders})`)
+      .bind(...ids)
+      .all();
+
+    const list = rows?.results || [];
+
+    // 2) 删除 D1 记录
+    await env.IMG
+      .prepare(`DELETE FROM img_log WHERE id IN (${placeholders})`)
+      .bind(...ids)
+      .run();
+
+    // 3) 删除 R2 对象（可选）
+    let r2Deleted = 0;
+    if (env.IMGRS) {
+      for (const r of list) {
+        const provider = String(r.provider || "").toLowerCase();
+        const url = String(r.url || "");
+        if (provider === "r2" && url.includes("/rfile/")) {
+          const key = url.replace("/rfile/", "");
+          if (key) {
+            try {
+              await env.IMGRS.delete(key);
+              r2Deleted++;
+            } catch (_) {}
+          }
+        }
+      }
     }
 
-    const inList = safeIds.map((x) => `'${x}'`).join(",");
-    const sql = `DELETE FROM img_log WHERE id IN (${inList})`;
-
-    await env.IMG.prepare(sql).run();
-
-    return new Response(JSON.stringify({ success: true, message: `成功删除 ${safeIds.length} 条记录` }), {
-      status: 200,
-      headers: corsHeaders,
-    });
-  } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), {
+    return new Response(
+      JSON.stringify({
+        success: true,
+        message: `成功删除 ${ids.length} 条记录`,
+        r2Deleted,
+      }),
+      { status: 200, headers: corsHeaders }
+    );
+  } catch (e) {
+    return new Response(JSON.stringify({ error: e?.message || String(e) }), {
       status: 500,
       headers: corsHeaders,
     });
