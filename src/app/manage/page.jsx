@@ -7,6 +7,27 @@ import { signOut } from "next-auth/react";
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 
+function normalizeBaseUrl(s) {
+  const v = String(s || "").trim();
+  if (!v) return "";
+  if (v.startsWith("http://") || v.startsWith("https://")) return v.replace(/\/+$/, "");
+  return `https://${v}`.replace(/\/+$/, "");
+}
+
+function getPublicDomains() {
+  const raw = process.env.NEXT_PUBLIC_CDN_DOMAINS || "";
+  const arr = raw
+    .split(",")
+    .map((x) => normalizeBaseUrl(x))
+    .filter(Boolean);
+  return Array.from(new Set(arr));
+}
+
+function buildAliasUrl(base, filename) {
+  const b = normalizeBaseUrl(base);
+  return `${b}/api/p/${encodeURIComponent(filename)}`;
+}
+
 function fmtTime(ts) {
   const n = Number(ts || 0);
   if (!n) return "-";
@@ -37,14 +58,30 @@ export default function ManagePage() {
   const [cursor, setCursor] = useState(null);
   const [hasMore, setHasMore] = useState(true);
 
-  const [provider, setProvider] = useState(""); // "", "tgchannel", "r2"
-  const [date, setDate] = useState(""); // YYYY-MM-DD（前端筛选）
-  const [q, setQ] = useState(""); // 前端关键字筛选
+  const [provider, setProvider] = useState("");
+  const [date, setDate] = useState("");
+  const [q, setQ] = useState("");
 
   const [selectedIds, setSelectedIds] = useState([]);
-
-  // 折叠状态：记录 id -> boolean
   const [openMap, setOpenMap] = useState({});
+
+  // 域名选择
+  const [domainOptions, setDomainOptions] = useState([]);
+  const [selectedDomain, setSelectedDomain] = useState("");
+
+  // 私密链接
+  const [usePrivate, setUsePrivate] = useState(false);
+  const [privateHours, setPrivateHours] = useState(24);
+  const [privateMap, setPrivateMap] = useState({}); // id -> privateUrl
+
+  useEffect(() => {
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    const preset = getPublicDomains();
+    const opts = [normalizeBaseUrl(origin), ...preset].filter(Boolean);
+    const dedup = Array.from(new Set(opts));
+    setDomainOptions(dedup);
+    setSelectedDomain(dedup[0] || normalizeBaseUrl(origin));
+  }, []);
 
   // 认证
   useEffect(() => {
@@ -112,6 +149,7 @@ export default function ManagePage() {
       setHasMore(true);
       setSelectedIds([]);
       setOpenMap({});
+      setPrivateMap({});
       fetchList({ reset: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -120,7 +158,6 @@ export default function ManagePage() {
   const filtered = useMemo(() => {
     let arr = items.slice();
 
-    // 日期筛选（前端）
     if (date) {
       arr = arr.filter((x) => {
         const ts = Number(x.created_at || 0);
@@ -133,7 +170,6 @@ export default function ManagePage() {
       });
     }
 
-    // 关键字筛选（filename/url/id）
     const kw = q.trim().toLowerCase();
     if (kw) {
       arr = arr.filter((x) => {
@@ -181,6 +217,11 @@ export default function ManagePage() {
 
       setItems((prev) => prev.filter((x) => !selectedIds.includes(x.id)));
       setSelectedIds([]);
+      setPrivateMap((prev) => {
+        const n = { ...prev };
+        for (const id of selectedIds) delete n[id];
+        return n;
+      });
       toast.success("删除成功");
     } catch (_) {
       toast.error("删除失败");
@@ -192,6 +233,19 @@ export default function ManagePage() {
   const toggleOpen = (id) => {
     setOpenMap((prev) => ({ ...prev, [id]: !prev[id] }));
   };
+
+  async function getPrivateUrl(id, filename, base) {
+    const expSeconds = Math.max(1, Number(privateHours || 24)) * 3600;
+    const qs = new URLSearchParams();
+    qs.set("filename", filename);
+    qs.set("expSeconds", String(expSeconds));
+    qs.set("base", base);
+    const res = await fetch(`/api/enableauthapi/sign?${qs.toString()}`);
+    if (!res.ok) throw new Error("sign api failed");
+    const data = await res.json().catch(() => ({}));
+    if (!data?.url) throw new Error("bad sign response");
+    setPrivateMap((prev) => ({ ...prev, [id]: data.url }));
+  }
 
   if (!authed) {
     return (
@@ -261,7 +315,7 @@ export default function ManagePage() {
       <div className="max-w-6xl mx-auto p-6">
         {/* 工具栏 */}
         <div className="bg-white border rounded-2xl p-5 shadow-sm">
-          <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
+          <div className="flex flex-col lg:flex-row gap-3 lg:items-center lg:justify-between">
             <div className="flex flex-wrap gap-2 items-center">
               <select
                 value={provider}
@@ -271,6 +325,19 @@ export default function ManagePage() {
                 <option value="">全部来源</option>
                 <option value="tgchannel">Telegram</option>
                 <option value="r2">R2</option>
+              </select>
+
+              <select
+                value={selectedDomain}
+                onChange={(e) => setSelectedDomain(e.target.value)}
+                className="px-3 py-2 rounded-xl bg-slate-50 border text-sm font-bold text-slate-700 outline-none"
+                title="选择复制外链域名"
+              >
+                {domainOptions.map((d) => (
+                  <option key={d} value={d}>
+                    {d.replace(/^https?:\/\//, "")}
+                  </option>
+                ))}
               </select>
 
               <input
@@ -297,6 +364,36 @@ export default function ManagePage() {
             </div>
 
             <div className="flex flex-wrap gap-2 items-center">
+              <label className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-50 border">
+                <input
+                  type="checkbox"
+                  checked={usePrivate}
+                  onChange={(e) => {
+                    setUsePrivate(e.target.checked);
+                    setPrivateMap({});
+                  }}
+                  className="w-4 h-4"
+                />
+                <span className="text-sm font-bold text-slate-700">显示私密链接</span>
+              </label>
+
+              {usePrivate && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-50 border">
+                  <span className="text-sm font-bold text-slate-700">有效期(小时)</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={720}
+                    value={privateHours}
+                    onChange={(e) => {
+                      setPrivateHours(e.target.value);
+                      setPrivateMap({});
+                    }}
+                    className="w-20 p-1 rounded-lg border bg-white text-sm font-mono outline-none"
+                  />
+                </div>
+              )}
+
               <button
                 onClick={selectAllFiltered}
                 className="px-3 py-2 rounded-xl bg-slate-100 border text-sm font-bold text-slate-700 hover:bg-slate-200 transition"
@@ -319,9 +416,7 @@ export default function ManagePage() {
             </div>
           </div>
 
-          <div className="mt-4 text-xs text-slate-400">
-            已加载 {items.length} 条；筛选后 {filtered.length} 条
-          </div>
+          <div className="mt-4 text-xs text-slate-400">已加载 {items.length} 条；筛选后 {filtered.length} 条</div>
         </div>
 
         {/* 小图列表 */}
@@ -330,18 +425,18 @@ export default function ManagePage() {
             const id = x.id || x.url;
             const filename = x.filename || id;
 
-            // 统一外链：/api/p/<filename>（无论 TG/R2）
-            const aliasUrl = `/api/p/${encodeURIComponent(filename)}`;
-
+            const publicUrl = buildAliasUrl(selectedDomain, filename);
             const providerText = x.provider || "-";
             const timeText = fmtTime(x.created_at);
             const checked = selectedIds.includes(id);
             const opened = !!openMap[id];
-            const codes = makeCodes(aliasUrl);
+            const codes = makeCodes(publicUrl);
+
+            const privateUrl = privateMap[id] || "";
+            const privateCodes = makeCodes(privateUrl);
 
             return (
               <div key={id} className="bg-white border rounded-2xl shadow-sm overflow-hidden">
-                {/* 小图 */}
                 <div className="relative">
                   <div className="absolute top-2 right-2 z-10">
                     <input
@@ -353,17 +448,11 @@ export default function ManagePage() {
                     />
                   </div>
 
-                  <a href={aliasUrl} target="_blank" rel="noreferrer">
-                    <img
-                      src={aliasUrl}
-                      alt={filename}
-                      className="w-full h-44 object-cover bg-slate-100"
-                      loading="lazy"
-                    />
+                  <a href={publicUrl} target="_blank" rel="noreferrer">
+                    <img src={publicUrl} alt={filename} className="w-full h-44 object-cover bg-slate-100" loading="lazy" />
                   </a>
                 </div>
 
-                {/* 信息区 */}
                 <div className="p-4">
                   <div className="text-xs text-slate-400 font-bold">
                     {providerText} · {timeText}
@@ -371,7 +460,6 @@ export default function ManagePage() {
 
                   <div className="mt-1 text-sm font-black text-slate-800 truncate">{filename}</div>
 
-                  {/* 只保留“展开外链”按钮（移除：复制链接 / 复制Markdown） */}
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button
                       onClick={() => toggleOpen(id)}
@@ -379,9 +467,24 @@ export default function ManagePage() {
                     >
                       {opened ? "收起外链" : "展开外链"}
                     </button>
+
+                    {usePrivate && (
+                      <button
+                        onClick={async () => {
+                          try {
+                            await getPrivateUrl(id, filename, selectedDomain);
+                            toast.success("私密链接已生成");
+                          } catch (_) {
+                            toast.error("私密链接生成失败");
+                          }
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-slate-900 text-white text-xs font-black hover:opacity-90 transition"
+                      >
+                        生成私密链接
+                      </button>
+                    )}
                   </div>
 
-                  {/* 折叠外链 */}
                   {opened && (
                     <div className="mt-4 space-y-3">
                       {Object.entries(codes).map(([k, v]) => (
@@ -398,6 +501,26 @@ export default function ManagePage() {
                           />
                         </div>
                       ))}
+
+                      {usePrivate && privateUrl && (
+                        <div className="pt-3 mt-3 border-t">
+                          <div className="text-[11px] font-black text-slate-500 mb-2">私密外链（签名）</div>
+                          {Object.entries(privateCodes).map(([k, v]) => (
+                            <div key={`p-${k}`} className="mt-2">
+                              <div className="text-[11px] font-black text-slate-500">{k}</div>
+                              <input
+                                readOnly
+                                value={v}
+                                onClick={(e) => {
+                                  e.target.select();
+                                  copy(v);
+                                }}
+                                className="mt-1 w-full p-2 bg-slate-50 border rounded text-[10px] font-mono text-slate-600 cursor-pointer hover:bg-white hover:border-blue-400 transition outline-none"
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -406,7 +529,6 @@ export default function ManagePage() {
           })}
         </div>
 
-        {/* 加载更多 */}
         <div className="mt-6 flex justify-center">
           {hasMore ? (
             <button
