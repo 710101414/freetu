@@ -75,7 +75,6 @@ export default function Home() {
         setLoginuser(data.role)
       } else {
         setisAuthapi(false)
-        // 修正默认选项，不再默认选择 58img
         setSelectedOption("tgchannel")
       }
     } catch (error) {
@@ -115,11 +114,9 @@ export default function Home() {
     return (totalSizeInBytes / (1024 * 1024)).toFixed(2);
   };
 
-  // --- 关键修改： handleUpload 增加权限拦截 ---
   const handleUpload = async (file = null) => {
-    // 如果没有登录或者是普通用户（非 admin），禁止网页端上传
     if (!isAuthapi || Loginuser !== 'admin') {
-      toast.error('未经授权：请先登录管理员账号。网页端已禁用匿名上传。');
+      toast.error('未经授权：网页端已禁用匿名上传，请先登录管理员账号。');
       return;
     }
 
@@ -127,12 +124,12 @@ export default function Home() {
     const filesToUpload = file ? [file] : selectedFiles;
 
     if (filesToUpload.length === 0) {
-      toast.error('请选择要上传的文件');
+      toast.error('请选择文件');
       setUploading(false);
       return;
     }
 
-    const formFieldName = selectedOption === "tencent" ? "media" : "file";
+    const formFieldName = "file";
     let successCount = 0;
 
     try {
@@ -141,9 +138,7 @@ export default function Home() {
         formData.append(formFieldName, file);
 
         try {
-          const targetUrl = selectedOption === "tgchannel" || selectedOption === "r2"
-            ? `/api/enableauthapi/${selectedOption}`
-            : `/api/${selectedOption}`;
+          const targetUrl = `/api/enableauthapi/${selectedOption}`;
 
           const response = await fetch(targetUrl, {
             method: 'POST',
@@ -158,22 +153,15 @@ export default function Home() {
             setSelectedFiles((prevFiles) => prevFiles.filter(f => f !== file));
             successCount++;
           } else {
-            let errorMsg;
-            try {
-              const errorData = await response.json();
-              errorMsg = errorData.message || `错误码: ${response.status}`;
-            } catch (jsonError) {
-              errorMsg = `上传失败，状态码: ${response.status}`;
-            }
-            toast.error(`上传 ${file.name} 失败: ${errorMsg}`);
+            toast.error(`上传 ${file.name} 失败`);
           }
         } catch (error) {
-          toast.error(`上传 ${file.name} 接口请求出错`);
+          toast.error(`接口请求出错`);
         }
       }
-      if(successCount > 0) toast.success(`已成功上传 ${successCount} 张图片`);
+      if(successCount > 0) toast.success(`成功上传 ${successCount} 张图片`);
     } catch (error) {
-      toast.error('上传过程发生严重错误');
+      toast.error('上传过程错误');
     } finally {
       setUploading(false);
     }
@@ -243,9 +231,9 @@ export default function Home() {
     const values = Array.from(codeElements).map(code => code.textContent);
     try {
       await navigator.clipboard.writeText(values.join("\n"));
-      toast.success(`批量链接复制成功`);
+      toast.success(`批量复制成功`);
     } catch (error) {
-      toast.error(`链接复制失败`)
+      toast.error(`复制失败`)
     }
   }
 
@@ -274,16 +262,13 @@ export default function Home() {
           className="object-cover w-36 h-40 m-2 cursor-pointer"
           controls
           onClick={() => handlerenderImageClick(fileUrl, "video")}
-        >
-          Your browser does not support the video tag.
-        </video>
+        />
       );
     } else {
       return (
         <img
           key={`image-${index}`}
           src={data.url}
-          alt={`Uploaded ${index}`}
           className="object-cover w-36 h-40 m-2 cursor-pointer"
           onClick={() => handlerenderImageClick(fileUrl, "other")}
         />
@@ -297,7 +282,7 @@ export default function Home() {
         return (
           <div className=" flex flex-col ">
             {uploadedImages.map((data, index) => (
-              <div key={index} className="m-2 rounded-2xl ring-offset-2 ring-2  ring-slate-100 flex flex-row ">
+              <div key={index} className="m-2 rounded-2xl ring-offset-2 ring-2 ring-slate-100 flex flex-row ">
                 {renderFile(data, index)}
                 <div className="flex flex-col justify-center w-4/5">
                   {[
@@ -311,7 +296,7 @@ export default function Home() {
                       readOnly
                       value={item.text}
                       onClick={item.onClick}
-                      className="px-3 my-1 py-2 border border-gray-300 rounded-lg bg-white text-sm text-gray-800 focus:outline-none placeholder-gray-400 cursor-pointer hover:bg-slate-50"
+                      className="px-3 my-1 py-2 border border-gray-300 rounded-lg bg-white text-sm text-gray-800 focus:outline-none cursor-pointer hover:bg-slate-50"
                     />
                   ))}
                 </div>
@@ -319,81 +304,20 @@ export default function Home() {
             ))}
           </div>
         );
-      case 'htmlLinks':
+      default:
         return (
           <div ref={parentRef} className=" p-4 bg-slate-100 cursor-pointer" onClick={handleCopyCode}>
             {uploadedImages.map((data, index) => (
               <div key={index} className="mb-2 ">
-                <code className=" w-2 break-all">{`<img src="${data.url}" alt="${data.name}" />`}</code>
-              </div>
-            ))}
-          </div >
-        );
-      case 'markdownLinks':
-        return (
-          <div ref={parentRef} className=" p-4 bg-slate-100 cursor-pointer" onClick={handleCopyCode}>
-            {uploadedImages.map((data, index) => (
-              <div key={index} className="mb-2">
-                <code className=" w-2 break-all">{`![${data.name}](${data.url})`}</code>
+                <code className=" w-2 break-all">
+                  {activeTab === 'htmlLinks' && `<img src="${data.url}" alt="${data.name}" />`}
+                  {activeTab === 'markdownLinks' && `![${data.name}](${data.url})`}
+                  {activeTab === 'bbcodeLinks' && `[img]${data.url}[/img]`}
+                  {activeTab === 'viewLinks' && `${data.url}`}
+                </code>
               </div>
             ))}
           </div>
-        );
-      case 'bbcodeLinks':
-        return (
-          <div ref={parentRef} className=" p-4 bg-slate-100 cursor-pointer" onClick={handleCopyCode}>
-            {uploadedImages.map((data, index) => (
-              <div key={index} className="mb-2">
-                <code className=" w-2 break-all">{`[img]${data.url}[/img]`}</code>
-              </div>
-            ))}
-          </div>
-        );
-      case 'viewLinks':
-        return (
-          <div ref={parentRef} className=" p-4 bg-slate-100 cursor-pointer" onClick={handleCopyCode}>
-            {uploadedImages.map((data, index) => (
-              <div key={index} className="mb-2">
-                <code className=" w-2 break-all">{`${data.url}`}</code>
-              </div>
-            ))}
-          </div>
-        );
-      default:
-        return null;
-    }
-  };
-
-  const handleSelectChange = (e) => {
-    setSelectedOption(e.target.value);
-  };
-
-  const handleSignOut = () => {
-    signOut({ callbackUrl: '/' });
-  };
-
-  const renderButton = () => {
-    if (!isAuthapi) {
-      return (
-        <Link href="/login">
-          <LoginButton>登录</LoginButton>
-        </Link>
-      );
-    }
-    switch (Loginuser) {
-      case 'user':
-        return <LoginButton onClick={handleSignOut}>登出</LoginButton>;
-      case 'admin':
-        return (
-          <Link href="/admin">
-            <LoginButton>管理</LoginButton>
-          </Link>
-        );
-      default:
-        return (
-          <Link href="/login">
-            <LoginButton>登录</LoginButton>
-          </Link>
         );
     }
   };
@@ -401,28 +325,26 @@ export default function Home() {
   return (
     <main className=" overflow-auto h-full flex w-full min-h-screen flex-col items-center justify-between">
       <header className="fixed top-0 h-[50px] left-0 w-full border-b bg-white flex z-50 justify-center items-center">
-        <nav className="flex justify-between items-center w-full max-w-4xl px-4">我的私人图床</nav>
+        <nav className="flex justify-between items-center w-full max-w-4xl px-4 font-bold">私人图床控制台</nav>
         {renderButton()}
       </header>
       <div className="mt-[60px] w-9/10 sm:w-9/10 md:w-9/10 lg:w-9/10 xl:w-3/5 2xl:w-2/3">
 
         <div className="flex flex-row">
           <div className="flex flex-col">
-            <div className="text-gray-800 text-lg font-bold">私有化上传控制台</div>
+            <div className="text-gray-800 text-lg font-bold">私有化上传</div>
             <div className="mb-4 text-sm text-gray-500">
-              单文件最大 5 MB; 托管总量: <span className="text-cyan-600">{Total}</span>; 你的IP: <span className="text-cyan-600">{IP}</span>
+              单文件最大 5 MB; 托管总量: <span className="text-cyan-600">{Total}</span>; IP: <span className="text-cyan-600">{IP}</span>
             </div>
           </div>
           <div className="flex flex-col sm:flex-col md:w-auto lg:flex-row xl:flex-row 2xl:flex-row mx-auto items-center">
-            <span className="text-lg">上传接口：</span>
+            <span className="text-lg">接口：</span>
             <select
               value={selectedOption}
-              onChange={handleSelectChange}
+              onChange={(e) => setSelectedOption(e.target.value)}
               className="text-lg p-2 border rounded text-center w-auto cursor-pointer bg-white">
-              <option value="tg">TG(电报)</option>
-              <option value="tgchannel">TG_Channel(频道)</option>
-              <option value="r2">R2(存储桶)</option>
-              {/* 58img 选项已在此物理删除 */}
+              <option value="tgchannel">TG_Channel</option>
+              <option value="r2">R2</option>
             </select>
           </div>
         </div>
@@ -440,12 +362,7 @@ export default function Home() {
               <div key={index} className="relative rounded-2xl w-44 h-48 ring-offset-2 ring-2 ring-blue-100 bg-white mx-3 my-3 flex flex-col items-center shadow-sm">
                 <div className="relative w-36 h-36 mt-2 cursor-pointer" onClick={() => handleImageClick(index)}>
                   {file.type.startsWith('image/') && (
-                    <Image
-                      src={URL.createObjectURL(file)}
-                      alt={`Preview ${file.name}`}
-                      fill={true}
-                      className="rounded-lg object-cover"
-                    />
+                    <Image src={URL.createObjectURL(file)} alt="Preview" fill={true} className="rounded-lg object-cover" />
                   )}
                   {file.type.startsWith('video/') && (
                     <video src={URL.createObjectURL(file)} className="w-full h-full object-cover rounded-lg" />
@@ -468,7 +385,7 @@ export default function Home() {
               <div className="absolute -z-0 left-0 top-0 w-full h-full flex items-center justify-center">
                 <div className="text-gray-400 flex flex-col items-center">
                   <FontAwesomeIcon icon={faImages} size="3x" className="mb-2 opacity-20" />
-                  拖拽或粘贴文件到此处上传
+                  拖拽或粘贴到此处上传
                 </div>
               </div>
             )}
@@ -477,7 +394,7 @@ export default function Home() {
 
         <div className="w-full rounded-md shadow-sm overflow-hidden mt-4 grid grid-cols-8">
           <div className="md:col-span-1 col-span-8">
-            <label htmlFor="file-upload" className="w-full h-10 bg-blue-500 cursor-pointer flex items-center justify-center text-white hover:bg-blue-600 transition-colors">
+            <label htmlFor="file-upload" className="w-full h-10 bg-blue-500 cursor-pointer flex items-center justify-center text-white hover:bg-blue-600">
               <FontAwesomeIcon icon={faImages} className="mr-2" />选择图片
             </label>
             <input id="file-upload" type="file" className="hidden" onChange={handleFileChange} multiple />
@@ -497,7 +414,7 @@ export default function Home() {
           </div>
         </div>
 
-        <ToastContainer position="bottom-right" autoClose={3000} />
+        <ToastContainer position="bottom-right" autoClose={2000} />
         
         <div className="w-full mt-4 min-h-[200px] mb-[60px]">
           {uploadedImages.length > 0 && (
@@ -507,7 +424,7 @@ export default function Home() {
                   <button
                     key={tab}
                     onClick={() => setActiveTab(tab)}
-                    className={`px-4 py-2 capitalize transition-colors ${activeTab === tab ? 'bg-blue-500 text-white' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'}`}
+                    className={`px-4 py-2 transition-colors ${activeTab === tab ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700'}`}
                   >
                     {tab.replace('Links', '')}
                   </button>
