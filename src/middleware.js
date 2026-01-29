@@ -1,76 +1,64 @@
-import { auth } from "@/auth"
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+import { auth } from "@/auth";
 
+function isPublicPath(pathname: string) {
+  // 公共外链：任何人都能访问（不防盗链）
+  if (pathname.startsWith("/api/p/")) return true;
+  if (pathname.startsWith("/api/cfile/")) return true;
+  if (pathname.startsWith("/api/rfile/")) return true;
 
-const ROOT = '/';
-const PUBLIC_ROUTES = ['/'];
-const DEFAULT_REDIRECT = '/login';
-const LOGIN = '/login'
-const API_ADMIN = "/api/admin"
-const ADMIN_PAGE = "/admin"
-const AUTH_API = "/api/enableauthapi"
-const enableAuthapi = process.env.ENABLE_AUTH_API === 'true';
+  // 你如果还有其它公开文件路由，也加在这里
+  // if (pathname.startsWith("/api/tfile/")) return true;
 
-export default auth(async (req) => {
-    const { nextUrl } = req;
+  // 静态资源 / Next 内部
+  if (pathname.startsWith("/_next/")) return true;
+  if (pathname === "/favicon.ico") return true;
 
-    // console.log(req?.auth?.user?.role);
-    const role = req?.auth?.user?.role;
+  return false;
+}
 
+function isAdminOnlyPath(pathname: string) {
+  // 这些必须管理员才允许访问
+  if (pathname === "/manage") return true;
+  if (pathname.startsWith("/api/enableauthapi/")) return true;
+  return false;
+}
 
+export default auth((req: NextRequest) => {
+  const { pathname } = req.nextUrl;
 
-    const isAuthenticated = !!req.auth;
-    const isAPI_ADMIN = nextUrl.pathname.startsWith(API_ADMIN);
-    const isADMIN_PAGE = nextUrl.pathname.startsWith(ADMIN_PAGE);
+  // 1) 公共资源直接放行
+  if (isPublicPath(pathname)) {
+    return NextResponse.next();
+  }
 
-    const isAuthAPI = nextUrl.pathname.startsWith(AUTH_API);
+  // 2) 管理路径：必须登录且 admin
+  if (isAdminOnlyPath(pathname)) {
+    const role = (req as any).auth?.user?.role;
+    if (role === "admin") return NextResponse.next();
 
-    if (!isAuthenticated) {
-        if (isAPI_ADMIN) {
-            return Response.json(
-                { status: "fail", message: "You are not logged in by admin !", success: false },
-                { status: 401 },
-            )
-        }
-        else if (isADMIN_PAGE) {
-            return Response.redirect(new URL(LOGIN, nextUrl));
-        }
-        else if (isAuthAPI) {
-
-            if (enableAuthapi) {
-                return Response.json(
-                    { status: "fail", message: "You are not logged in by user !", success: false },
-                    { status: 401 }
-                );
-            }
-            else {
-                return
-            }
-        }
-
-        else {
-            return
-
-        }
+    // API 请求：直接 403（避免跳转造成奇怪问题）
+    if (pathname.startsWith("/api/")) {
+      return new NextResponse("Forbidden", { status: 403 });
     }
 
-    if (role === 'admin') {
-        return;
-    }
+    // 页面请求：跳登录
+    const url = req.nextUrl.clone();
+    url.pathname = "/login";
+    return NextResponse.redirect(url);
+  }
 
-    if (role === 'user') {
-        if (isAPI_ADMIN || isADMIN_PAGE) {
-            return Response.redirect(new URL(LOGIN, nextUrl));
+  // 3) 其他页面默认放行（你的主页等）
+  return NextResponse.next();
+});
 
-        }
-    }
-
-})
-
-// 使用静态 matcher 配置
 export const config = {
-    matcher: [
-        "/admin/:path*",
-        "/api/admin/:path*",
-        "/api/enableauthapi/:path*"
-    ],
+  matcher: [
+    /*
+      对所有路径生效，但我们在逻辑里放行 public paths
+      这样不会误伤 /api/p 与 /api/cfile
+    */
+    "/((?!_next/static|_next/image|favicon.ico).*)",
+  ],
 };
