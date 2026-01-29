@@ -32,12 +32,10 @@ export default function Home() {
   const [selectedOption, setSelectedOption] = useState("tgchannel");
   const [isAuthapi, setIsAuthapi] = useState(false);
   const [role, setRole] = useState("");
-  const [isManageMode, setIsManageMode] = useState(false);
-  const [selectedImageIds, setSelectedImageIds] = useState([]);
 
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [historyCursor, setHistoryCursor] = useState(null);
-  const [historyHasMore, setHistoryHasMore] = useState(true);
+  // 命名相关：可留空
+  const [customBaseName, setCustomBaseName] = useState(""); // 例如 2026-01-29-000
+  const [autoDailyName, setAutoDailyName] = useState(true);
 
   const previewItems = useMemo(() => {
     return selectedFiles.map((file) => ({
@@ -57,17 +55,12 @@ export default function Home() {
   }, [previewItems]);
 
   const isImageFile = (file) => {
-    return (
-      !!file &&
-      typeof file.type === "string" &&
-      file.type.startsWith("image/")
-    );
+    return !!file && typeof file.type === "string" && file.type.startsWith("image/");
   };
 
   const appendFiles = (files) => {
     const arr = Array.from(files || []);
     const imgFiles = arr.filter(isImageFile);
-
     if (arr.length > 0 && imgFiles.length === 0) {
       toast.warn("检测到非图片文件，已忽略");
       return;
@@ -89,6 +82,7 @@ export default function Home() {
           const ipData = await ipRes.json();
           if (ipData?.ip) setIP(ipData.ip);
         }
+
         if (totalRes.ok) {
           const totalData = await totalRes.json();
           if (typeof totalData?.total !== "undefined") setTotal(totalData.total);
@@ -118,6 +112,7 @@ export default function Home() {
     const onPaste = (e) => {
       const items = e.clipboardData?.items || [];
       const blobs = [];
+
       for (let i = 0; i < items.length; i++) {
         const it = items[i];
         if (it?.type && it.type.indexOf("image") !== -1) {
@@ -130,55 +125,17 @@ export default function Home() {
         toast.info("已捕获剪贴板图片");
       }
     };
+
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
   }, []);
-
-  const fetchHistory = async ({ reset = false } = {}) => {
-    if (!isAuthapi || role !== "admin") return;
-    if (historyLoading) return;
-
-    setHistoryLoading(true);
-    try {
-      const qs = new URLSearchParams();
-      qs.set("limit", "30");
-      if (!reset && historyCursor) qs.set("cursor", String(historyCursor));
-
-      const res = await fetch(`/api/enableauthapi/list?${qs.toString()}`);
-      if (!res.ok) throw new Error("list api failed");
-
-      const data = await res.json().catch(() => ({}));
-      const items = Array.isArray(data.items) ? data.items : [];
-      const mapped = items
-        .filter((x) => x && x.url)
-        .map((x) => ({
-          id: x.id || x.url,
-          name: x.filename || x.name || x.id || x.url,
-          url: x.url,
-        }));
-
-      if (reset) setUploadedImages(mapped);
-      else setUploadedImages((prev) => [...prev, ...mapped]);
-
-      setHistoryCursor(data.nextCursor || null);
-      setHistoryHasMore(Boolean(data.nextCursor));
-    } catch (_) {
-      toast.warn("历史库拉取失败（list 接口异常）");
-    } finally {
-      setHistoryLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (isAuthapi && role === "admin") fetchHistory({ reset: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthapi, role]);
 
   const handleUpload = async (file = null, index = null) => {
     if (!isAuthapi || role !== "admin")
       return toast.error("权限不足：请先登录管理员账号");
 
     setUploading(true);
+
     const files = file ? [file] : selectedFiles;
     if (files.length === 0) {
       setUploading(false);
@@ -190,58 +147,44 @@ export default function Home() {
       const formData = new FormData();
       formData.append("file", f);
 
+      // 命名字段：后端会优先使用 name；没传则自动生成（若 autoDailyName=true）
+      if (customBaseName.trim()) formData.append("name", customBaseName.trim());
+      formData.append("autoDailyName", autoDailyName ? "true" : "false");
+
       try {
         const res = await fetch(`/api/enableauthapi/${selectedOption}`, {
           method: "POST",
           body: formData,
         });
+
         const result = await res.json().catch(() => ({}));
 
         if (res.ok) {
           const uploadedFile = {
             id: result?.id || result?.url || `${Date.now()}-${Math.random()}`,
-            name: f?.name || `img-${Date.now()}.png`,
+            name: result?.name || f?.name || `img-${Date.now()}.png`,
             url: result?.url,
           };
-          if (uploadedFile.url) setUploadedImages((prev) => [uploadedFile, ...prev]);
-          if (file) setSelectedFiles((prev) => prev.filter((_, idx) => idx !== index));
-          else setSelectedFiles([]);
+
+          if (!uploadedFile.url) {
+            toast.error("上传成功但未返回 URL（后端返回结构异常）");
+          } else {
+            setUploadedImages((prev) => [uploadedFile, ...prev]);
+          }
+
+          if (file) {
+            setSelectedFiles((prev) => prev.filter((_, idx) => idx !== index));
+          } else {
+            setSelectedFiles([]);
+          }
         } else {
           toast.error(`上传失败: ${result?.message || "未知错误"}`);
         }
-      } catch (_) {
+      } catch (e) {
         toast.error("API通讯错误");
       }
     }
 
-    setUploading(false);
-    if (isAuthapi && role === "admin") fetchHistory({ reset: true });
-  };
-
-  const handleDeleteBatch = async () => {
-    if (selectedImageIds.length === 0) return toast.warn("请选择记录");
-    if (!confirm(`确定删除选中的 ${selectedImageIds.length} 张图片？`)) return;
-
-    setUploading(true);
-    try {
-      const res = await fetch("/api/enableauthapi/delete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids: selectedImageIds }),
-      });
-      if (res.ok) {
-        setUploadedImages((prev) =>
-          prev.filter((img) => !selectedImageIds.includes(img.id))
-        );
-        setSelectedImageIds([]);
-        setIsManageMode(false);
-        toast.success("记录移除成功");
-      } else {
-        toast.error("删除失败");
-      }
-    } catch (_) {
-      toast.error("请求失败");
-    }
     setUploading(false);
   };
 
@@ -299,41 +242,59 @@ export default function Home() {
       </header>
 
       <div className="mt-20 w-full max-w-4xl p-4">
-        <div className="bg-white p-6 rounded-2xl shadow-sm mb-6 flex justify-between items-center border">
-          <div>
-            <h1 className="text-xl font-black text-slate-800 tracking-tighter italic uppercase">
-              Uploader
-            </h1>
-            <p className="text-xs text-slate-400 mt-1">
-              托管总量: {Total} | 您的IP: {IP}
-            </p>
+        {/* 控制面板 */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm mb-6 border">
+          <div className="flex justify-between items-center">
+            <div>
+              <h1 className="text-xl font-black text-slate-800 tracking-tighter italic uppercase">
+                Uploader
+              </h1>
+              <p className="text-xs text-slate-400 mt-1">
+                托管总量: {Total} | 您的IP: {IP}
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <select
+                value={selectedOption}
+                onChange={(e) => setSelectedOption(e.target.value)}
+                className="border-2 border-slate-50 rounded-xl p-2 bg-slate-50 text-xs font-bold text-slate-600 outline-none"
+              >
+                <option value="tgchannel">Telegram 频道</option>
+                <option value="r2">Cloudflare R2</option>
+              </select>
+            </div>
           </div>
-          <div className="flex gap-2">
-            <select
-              value={selectedOption}
-              onChange={(e) => setSelectedOption(e.target.value)}
-              className="border-2 border-slate-50 rounded-xl p-2 bg-slate-50 text-xs font-bold text-slate-600 outline-none"
-            >
-              <option value="tgchannel">Telegram 频道</option>
-              <option value="r2">Cloudflare R2</option>
-            </select>
 
-            <button
-              onClick={() => {
-                setIsManageMode(!isManageMode);
-                setSelectedImageIds([]);
-              }}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition ${
-                isManageMode
-                  ? "bg-orange-500 text-white shadow-lg"
-                  : "bg-slate-100 text-slate-500"
-              }`}
-            >
-              批量管理模式
-            </button>
+          {/* 命名设置 */}
+          <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-3 items-center">
+            <div className="md:col-span-2">
+              <div className="text-xs font-black text-slate-500 mb-1">自定义名称（可选）</div>
+              <input
+                value={customBaseName}
+                onChange={(e) => setCustomBaseName(e.target.value)}
+                placeholder="例如：2026-01-29-000（留空则自动生成）"
+                className="w-full p-3 rounded-xl bg-slate-50 border text-sm font-mono text-slate-700 outline-none"
+              />
+              <div className="text-[11px] text-slate-400 mt-1">
+                后端会自动补扩展名（.png/.jpg 等），并写入历史库。
+              </div>
+            </div>
+
+            <label className="flex items-center gap-2 bg-slate-50 border rounded-xl p-3">
+              <input
+                type="checkbox"
+                checked={autoDailyName}
+                onChange={(e) => setAutoDailyName(e.target.checked)}
+                className="w-4 h-4"
+              />
+              <span className="text-xs font-bold text-slate-700">
+                自动按天编号命名（YYYY-MM-DD-000）
+              </span>
+            </label>
           </div>
         </div>
 
+        {/* 待上传队列 */}
         <div
           className="border-4 border-dashed border-slate-200 rounded-[2rem] bg-white p-8 min-h-[160px] flex flex-wrap gap-4 relative transition-all hover:border-blue-300"
           onDragOver={(e) => e.preventDefault()}
@@ -375,11 +336,7 @@ export default function Home() {
 
           {selectedFiles.length === 0 && (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300 pointer-events-none">
-              <FontAwesomeIcon
-                icon={faImages}
-                size="3x"
-                className="mb-2 opacity-10"
-              />
+              <FontAwesomeIcon icon={faImages} size="3x" className="mb-2 opacity-10" />
               <p className="text-sm font-bold">支持 截图粘贴 / 拖拽 / 点击</p>
             </div>
           )}
@@ -404,102 +361,34 @@ export default function Home() {
           </button>
         )}
 
-        <div className="mt-10 bg-white rounded-[2.5rem] p-10 shadow-sm border border-slate-100 min-h-[400px]">
+        {/* 首页展示：保持你原来的 5 外链方式展示 */}
+        <div className="mt-10 bg-white rounded-[2.5rem] p-10 shadow-sm border border-slate-100 min-h-[240px]">
           <div className="flex justify-between items-center mb-10 border-b pb-4">
             <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
-              最近记录（仅展示，不建议在首页做重管理）
+              上传结果（最近）
             </h2>
-            <div className="flex items-center gap-2">
-              {isAuthapi && role === "admin" && (
-                <button
-                  onClick={() => fetchHistory({ reset: true })}
-                  className="bg-slate-100 text-slate-700 px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-slate-200 transition shadow-sm"
-                  disabled={historyLoading}
-                >
-                  {historyLoading ? "刷新中..." : "刷新"}
-                </button>
-              )}
-              {isAuthapi && role === "admin" && historyHasMore && (
-                <button
-                  onClick={() => fetchHistory({ reset: false })}
-                  className="bg-slate-100 text-slate-700 px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-slate-200 transition shadow-sm"
-                  disabled={historyLoading}
-                >
-                  {historyLoading ? "加载中..." : "加载更多"}
-                </button>
-              )}
-              {isManageMode && (
-                <button
-                  onClick={handleDeleteBatch}
-                  className="bg-red-50 text-red-600 px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-red-600 hover:text-white transition shadow-sm"
-                >
-                  删除已选 ({selectedImageIds.length})
-                </button>
-              )}
-            </div>
           </div>
 
           <div className="space-y-12">
             {uploadedImages.length === 0 && (
               <div className="col-span-full text-center py-20 text-slate-200 italic">
-                暂无历史记录
+                暂无记录
               </div>
             )}
 
             {uploadedImages.map((img, i) => (
               <div
                 key={img.id || i}
-                className={`relative flex flex-col md:flex-row gap-8 p-6 rounded-3xl border transition-all ${
-                  selectedImageIds.includes(img.id)
-                    ? "border-blue-500 bg-blue-50/50 ring-2 ring-blue-100"
-                    : "border-slate-50 bg-slate-50/30"
-                }`}
+                className="relative flex flex-col md:flex-row gap-8 p-6 rounded-3xl border border-slate-50 bg-slate-50/30"
               >
-                <div
-                  className="w-full md:w-48 h-48 rounded-2xl overflow-hidden shadow-sm border-2 border-white relative cursor-pointer"
-                  onClick={() =>
-                    isManageMode &&
-                    setSelectedImageIds((prev) =>
-                      prev.includes(img.id)
-                        ? prev.filter((id) => id !== img.id)
-                        : [...prev, img.id]
-                    )
-                  }
-                >
-                  <img
-                    src={img.url}
-                    className="w-full h-full object-cover"
-                    loading="lazy"
-                    alt={img.name || "uploaded"}
-                  />
-                  {isManageMode && (
-                    <div className="absolute top-2 left-2 z-10 pointer-events-none">
-                      <FontAwesomeIcon
-                        icon={
-                          selectedImageIds.includes(img.id)
-                            ? faCheckSquare
-                            : faSquare
-                        }
-                        className={`text-2xl ${
-                          selectedImageIds.includes(img.id)
-                            ? "text-blue-500"
-                            : "text-white/80 drop-shadow-md"
-                        }`}
-                      />
-                    </div>
-                  )}
+                <div className="w-full md:w-48 h-48 rounded-2xl overflow-hidden shadow-sm border-2 border-white relative">
+                  <img src={img.url} className="w-full h-full object-cover" loading="lazy" alt={img.name || "uploaded"} />
                 </div>
 
                 <div className="flex-1">
                   <LinkRow label="图片链接" value={img.url} />
-                  <LinkRow
-                    label="HTML"
-                    value={`<a href="${img.url}" target="_blank"><img src="${img.url}"></a>`}
-                  />
-                  <LinkRow
-                    label="BBCode"
-                    value={`[url=${img.url}][img]${img.url}[/img][/url]`}
-                  />
+                  <LinkRow label="HTML" value={`<a href="${img.url}" target="_blank"><img src="${img.url}"></a>`} />
+                  <LinkRow label="BBCode" value={`[url=${img.url}][img]${img.url}[/img][/url]`} />
                   <LinkRow label="Markdown" value={`![image](${img.url})`} />
                   <LinkRow label="图片URL" value={img.url} />
                 </div>
