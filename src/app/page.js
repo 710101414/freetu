@@ -14,7 +14,6 @@ import Footer from "@/components/Footer";
 import Link from "next/link";
 import LoadingOverlay from "@/components/LoadingOverlay";
 
-// 登录按钮小组件
 const LoginButton = ({ onClick, children }) => (
   <button
     onClick={onClick}
@@ -25,8 +24,8 @@ const LoginButton = ({ onClick, children }) => (
 );
 
 export default function Home() {
-  const [selectedFiles, setSelectedFiles] = useState([]); // File[]
-  const [uploadedImages, setUploadedImages] = useState([]); // {id,name,url}[]
+  const [selectedFiles, setSelectedFiles] = useState([]);
+  const [uploadedImages, setUploadedImages] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [IP, setIP] = useState("");
   const [Total, setTotal] = useState("?");
@@ -73,12 +72,8 @@ export default function Home() {
       toast.warn("检测到非图片文件，已忽略");
       return;
     }
-    if (imgFiles.length !== arr.length) {
-      toast.warn("已忽略部分非图片文件");
-    }
-    if (imgFiles.length > 0) {
-      setSelectedFiles((prev) => [...prev, ...imgFiles]);
-    }
+    if (imgFiles.length !== arr.length) toast.warn("已忽略部分非图片文件");
+    if (imgFiles.length > 0) setSelectedFiles((prev) => [...prev, ...imgFiles]);
   };
 
   useEffect(() => {
@@ -94,7 +89,6 @@ export default function Home() {
           const ipData = await ipRes.json();
           if (ipData?.ip) setIP(ipData.ip);
         }
-
         if (totalRes.ok) {
           const totalData = await totalRes.json();
           if (typeof totalData?.total !== "undefined") setTotal(totalData.total);
@@ -124,7 +118,6 @@ export default function Home() {
     const onPaste = (e) => {
       const items = e.clipboardData?.items || [];
       const blobs = [];
-
       for (let i = 0; i < items.length; i++) {
         const it = items[i];
         if (it?.type && it.type.indexOf("image") !== -1) {
@@ -132,13 +125,11 @@ export default function Home() {
           if (blob && isImageFile(blob)) blobs.push(blob);
         }
       }
-
       if (blobs.length > 0) {
         setSelectedFiles((prev) => [...prev, ...blobs]);
         toast.info("已捕获剪贴板图片");
       }
     };
-
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
   }, []);
@@ -158,7 +149,6 @@ export default function Home() {
 
       const data = await res.json().catch(() => ({}));
       const items = Array.isArray(data.items) ? data.items : [];
-
       const mapped = items
         .filter((x) => x && x.url)
         .map((x) => ({
@@ -172,17 +162,15 @@ export default function Home() {
 
       setHistoryCursor(data.nextCursor || null);
       setHistoryHasMore(Boolean(data.nextCursor));
-    } catch (e) {
-      toast.warn("历史库拉取失败（若未创建 list 接口可忽略）");
+    } catch (_) {
+      toast.warn("历史库拉取失败（list 接口异常）");
     } finally {
       setHistoryLoading(false);
     }
   };
 
   useEffect(() => {
-    if (isAuthapi && role === "admin") {
-      fetchHistory({ reset: true });
-    }
+    if (isAuthapi && role === "admin") fetchHistory({ reset: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthapi, role]);
 
@@ -191,7 +179,6 @@ export default function Home() {
       return toast.error("权限不足：请先登录管理员账号");
 
     setUploading(true);
-
     const files = file ? [file] : selectedFiles;
     if (files.length === 0) {
       setUploading(false);
@@ -208,7 +195,6 @@ export default function Home() {
           method: "POST",
           body: formData,
         });
-
         const result = await res.json().catch(() => ({}));
 
         if (res.ok) {
@@ -217,31 +203,19 @@ export default function Home() {
             name: f?.name || `img-${Date.now()}.png`,
             url: result?.url,
           };
-
-          if (!uploadedFile.url) {
-            toast.error("上传成功但未返回 URL（后端返回结构异常）");
-          } else {
-            setUploadedImages((prev) => [uploadedFile, ...prev]);
-          }
-
-          if (file) {
-            setSelectedFiles((prev) => prev.filter((_, idx) => idx !== index));
-          } else {
-            setSelectedFiles([]);
-          }
+          if (uploadedFile.url) setUploadedImages((prev) => [uploadedFile, ...prev]);
+          if (file) setSelectedFiles((prev) => prev.filter((_, idx) => idx !== index));
+          else setSelectedFiles([]);
         } else {
           toast.error(`上传失败: ${result?.message || "未知错误"}`);
         }
-      } catch (e) {
+      } catch (_) {
         toast.error("API通讯错误");
       }
     }
 
     setUploading(false);
-
-    if (isAuthapi && role === "admin") {
-      fetchHistory({ reset: true });
-    }
+    if (isAuthapi && role === "admin") fetchHistory({ reset: true });
   };
 
   const handleDeleteBatch = async () => {
@@ -255,7 +229,6 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids: selectedImageIds }),
       });
-
       if (res.ok) {
         setUploadedImages((prev) =>
           prev.filter((img) => !selectedImageIds.includes(img.id))
@@ -266,7 +239,7 @@ export default function Home() {
       } else {
         toast.error("删除失败");
       }
-    } catch (e) {
+    } catch (_) {
       toast.error("请求失败");
     }
     setUploading(false);
@@ -276,8 +249,8 @@ export default function Home() {
     try {
       await navigator.clipboard.writeText(text);
       toast.success("已复制", { autoClose: 800 });
-    } catch (e) {
-      toast.error("复制失败（可能不是 HTTPS 或未授权）");
+    } catch (_) {
+      toast.error("复制失败");
     }
   };
 
@@ -306,13 +279,11 @@ export default function Home() {
         <span className="font-bold text-lg text-blue-600">私人图床终端</span>
         <div className="flex items-center">
           {isAuthapi && role === "admin" && (
-            <button
-              onClick={() => fetchHistory({ reset: true })}
-              className="px-4 py-2 mx-2 bg-slate-100 text-slate-700 rounded-xl font-medium shadow-sm hover:bg-slate-200 transition"
-              disabled={historyLoading}
-            >
-              {historyLoading ? "刷新中..." : "刷新历史"}
-            </button>
+            <Link href="/manage">
+              <button className="px-4 py-2 mx-2 bg-slate-100 text-slate-700 rounded-xl font-medium shadow-sm hover:bg-slate-200 transition">
+                管理后台
+              </button>
+            </Link>
           )}
 
           {isAuthapi ? (
@@ -436,19 +407,18 @@ export default function Home() {
         <div className="mt-10 bg-white rounded-[2.5rem] p-10 shadow-sm border border-slate-100 min-h-[400px]">
           <div className="flex justify-between items-center mb-10 border-b pb-4">
             <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
-              嵌入代码
+              最近记录（仅展示，不建议在首页做重管理）
             </h2>
-
             <div className="flex items-center gap-2">
-              {isManageMode && (
+              {isAuthapi && role === "admin" && (
                 <button
-                  onClick={handleDeleteBatch}
-                  className="bg-red-50 text-red-600 px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-red-600 hover:text-white transition shadow-sm"
+                  onClick={() => fetchHistory({ reset: true })}
+                  className="bg-slate-100 text-slate-700 px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-slate-200 transition shadow-sm"
+                  disabled={historyLoading}
                 >
-                  确认删除已选记录 ({selectedImageIds.length})
+                  {historyLoading ? "刷新中..." : "刷新"}
                 </button>
               )}
-
               {isAuthapi && role === "admin" && historyHasMore && (
                 <button
                   onClick={() => fetchHistory({ reset: false })}
@@ -456,6 +426,14 @@ export default function Home() {
                   disabled={historyLoading}
                 >
                   {historyLoading ? "加载中..." : "加载更多"}
+                </button>
+              )}
+              {isManageMode && (
+                <button
+                  onClick={handleDeleteBatch}
+                  className="bg-red-50 text-red-600 px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-red-600 hover:text-white transition shadow-sm"
+                >
+                  删除已选 ({selectedImageIds.length})
                 </button>
               )}
             </div>
