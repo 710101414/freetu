@@ -6,6 +6,26 @@ import { signOut } from "next-auth/react";
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 
+function fmtTime(ts) {
+  const n = Number(ts || 0);
+  if (!n) return "-";
+  try {
+    return new Date(n).toLocaleString();
+  } catch {
+    return "-";
+  }
+}
+
+function makeCodes(url) {
+  return {
+    "图片链接": url,
+    HTML: `<a href="${url}" target="_blank"><img src="${url}"></a>`,
+    BBCode: `[url=${url}][img]${url}[/img][/url]`,
+    Markdown: `![image](${url})`,
+    "图片URL": url,
+  };
+}
+
 export default function ManagePage() {
   const [role, setRole] = useState("");
   const [authed, setAuthed] = useState(false);
@@ -17,12 +37,15 @@ export default function ManagePage() {
   const [hasMore, setHasMore] = useState(true);
 
   const [provider, setProvider] = useState(""); // "", "tgchannel", "r2"
-  const [date, setDate] = useState(""); // YYYY-MM-DD (仅前端筛选用)
-  const [q, setQ] = useState(""); // 关键字（前端筛选 filename/url）
+  const [date, setDate] = useState(""); // YYYY-MM-DD（前端筛选）
+  const [q, setQ] = useState(""); // 前端关键字筛选
 
   const [selectedIds, setSelectedIds] = useState([]);
 
-  // 认证：复用 isauth
+  // 折叠状态：记录 id -> boolean
+  const [openMap, setOpenMap] = useState({});
+
+  // 认证
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -55,15 +78,12 @@ export default function ManagePage() {
     setLoading(true);
     try {
       const qs = new URLSearchParams();
-      qs.set("limit", "50");
+      qs.set("limit", "60");
       if (!reset && cursor) qs.set("cursor", String(cursor));
       if (provider) qs.set("provider", provider);
 
       const res = await fetch(`/api/enableauthapi/list?${qs.toString()}`);
-      if (!res.ok) {
-        const t = await res.text().catch(() => "");
-        throw new Error(t || "list api failed");
-      }
+      if (!res.ok) throw new Error("list api failed");
 
       const data = await res.json().catch(() => ({}));
       const newItems = Array.isArray(data.items) ? data.items : [];
@@ -73,7 +93,7 @@ export default function ManagePage() {
 
       setCursor(data.nextCursor || null);
       setHasMore(Boolean(data.nextCursor));
-    } catch (e) {
+    } catch (_) {
       toast.error("拉取历史失败");
     } finally {
       setLoading(false);
@@ -82,18 +102,17 @@ export default function ManagePage() {
 
   useEffect(() => {
     if (authed && role === "admin") {
-      // 首次进入拉取
       fetchList({ reset: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed, role]);
 
-  // 切换 provider 时重置拉取
   useEffect(() => {
     if (authed && role === "admin") {
       setCursor(null);
       setHasMore(true);
       setSelectedIds([]);
+      setOpenMap({});
       fetchList({ reset: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -102,7 +121,7 @@ export default function ManagePage() {
   const filtered = useMemo(() => {
     let arr = items.slice();
 
-    // 按日期（前端）：把 created_at(毫秒) 转成 YYYY-MM-DD 比较
+    // 日期筛选（前端）
     if (date) {
       arr = arr.filter((x) => {
         const ts = Number(x.created_at || 0);
@@ -115,7 +134,7 @@ export default function ManagePage() {
       });
     }
 
-    // 关键字：filename/url/id
+    // 关键字筛选（filename/url/id）
     const kw = q.trim().toLowerCase();
     if (kw) {
       arr = arr.filter((x) => {
@@ -163,7 +182,6 @@ export default function ManagePage() {
 
       if (!res.ok) throw new Error("delete failed");
 
-      // 前端移除
       setItems((prev) => prev.filter((x) => !selectedIds.includes(x.id)));
       setSelectedIds([]);
       toast.success("删除成功");
@@ -172,6 +190,10 @@ export default function ManagePage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const toggleOpen = (id) => {
+    setOpenMap((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
   if (!authed) {
@@ -249,6 +271,7 @@ export default function ManagePage() {
       </header>
 
       <div className="max-w-6xl mx-auto p-6">
+        {/* 工具栏 */}
         <div className="bg-white border rounded-2xl p-5 shadow-sm">
           <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
             <div className="flex flex-wrap gap-2 items-center">
@@ -272,7 +295,7 @@ export default function ManagePage() {
               <input
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                placeholder="搜索 filename / url / id"
+                placeholder="搜索 文件名/URL/ID"
                 className="px-3 py-2 rounded-xl bg-slate-50 border text-sm font-bold text-slate-700 outline-none w-64"
               />
 
@@ -309,68 +332,103 @@ export default function ManagePage() {
           </div>
 
           <div className="mt-4 text-xs text-slate-400">
-            已加载 {items.length} 条记录；筛选后 {filtered.length} 条
+            已加载 {items.length} 条；筛选后 {filtered.length} 条
           </div>
         </div>
 
-        <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* 小图列表 */}
+        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map((x) => {
-            const ts = Number(x.created_at || 0);
-            const timeText = ts ? new Date(ts).toLocaleString() : "-";
-            const checked = selectedIds.includes(x.id);
+            const id = x.id || x.url;
+            const url = x.url;
+            const filename = x.filename || id;
+            const providerText = x.provider || "-";
+            const timeText = fmtTime(x.created_at);
+            const checked = selectedIds.includes(id);
+            const opened = !!openMap[id];
+            const codes = makeCodes(url);
 
             return (
-              <div key={x.id} className="bg-white border rounded-2xl p-4 shadow-sm">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-xs text-slate-400 font-bold">
-                      {x.provider || "-"} · {timeText}
-                    </div>
-                    <div className="text-sm font-black text-slate-800 truncate mt-1">
-                      {x.filename || x.id}
-                    </div>
-                    <div className="text-[11px] text-slate-500 font-mono break-all mt-2">
-                      {x.url}
-                    </div>
+              <div key={id} className="bg-white border rounded-2xl shadow-sm overflow-hidden">
+                {/* 小图 */}
+                <div className="relative">
+                  <div className="absolute top-2 right-2 z-10">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleSelect(id)}
+                      className="w-5 h-5"
+                      aria-label="select"
+                    />
                   </div>
 
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => toggleSelect(x.id)}
-                    className="w-5 h-5 mt-1"
-                  />
+                  <a href={url} target="_blank" rel="noreferrer">
+                    <img
+                      src={url}
+                      alt={filename}
+                      className="w-full h-44 object-cover bg-slate-100"
+                      loading="lazy"
+                    />
+                  </a>
                 </div>
 
-                {x.url && (
-                  <div className="mt-3 flex gap-2 flex-wrap">
+                {/* 信息区 */}
+                <div className="p-4">
+                  <div className="text-xs text-slate-400 font-bold">
+                    {providerText} · {timeText}
+                  </div>
+
+                  <div className="mt-1 text-sm font-black text-slate-800 truncate">
+                    {filename}
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap gap-2">
                     <button
-                      onClick={() => copy(x.url)}
+                      onClick={() => copy(url)}
                       className="px-3 py-1.5 rounded-xl bg-slate-100 border text-xs font-bold text-slate-700 hover:bg-slate-200 transition"
                     >
                       复制链接
                     </button>
                     <button
-                      onClick={() => copy(`![image](${x.url})`)}
+                      onClick={() => copy(`![image](${url})`)}
                       className="px-3 py-1.5 rounded-xl bg-slate-100 border text-xs font-bold text-slate-700 hover:bg-slate-200 transition"
                     >
                       复制Markdown
                     </button>
-                    <a
-                      href={x.url}
-                      target="_blank"
-                      rel="noreferrer"
+                    <button
+                      onClick={() => toggleOpen(id)}
                       className="px-3 py-1.5 rounded-xl bg-blue-600 text-white text-xs font-black hover:bg-blue-700 transition"
                     >
-                      打开
-                    </a>
+                      {opened ? "收起外链" : "展开外链"}
+                    </button>
                   </div>
-                )}
+
+                  {/* 折叠外链 */}
+                  {opened && (
+                    <div className="mt-4 space-y-3">
+                      {Object.entries(codes).map(([k, v]) => (
+                        <div key={k}>
+                          <div className="text-[11px] font-black text-slate-500">{k}</div>
+                          <input
+                            readOnly
+                            value={v}
+                            onClick={(e) => {
+                              e.target.select();
+                              copy(v);
+                            }}
+                            className="mt-1 w-full p-2 bg-slate-50 border rounded text-[10px] font-mono text-slate-600 cursor-pointer hover:bg-white hover:border-blue-400 transition outline-none"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             );
           })}
         </div>
 
+        {/* 加载更多 */}
         <div className="mt-6 flex justify-center">
           {hasMore ? (
             <button
