@@ -1,6 +1,6 @@
 // 文件：src/app/page.jsx
 "use client";
-import { useState, useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { signOut } from "next-auth/react";
 import { faImages, faTimesCircle } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -19,20 +19,51 @@ const LoginButton = ({ onClick, children }) => (
   </button>
 );
 
+function normalizeBaseUrl(s) {
+  const v = String(s || "").trim();
+  if (!v) return "";
+  if (v.startsWith("http://") || v.startsWith("https://")) return v.replace(/\/+$/, "");
+  return `https://${v}`.replace(/\/+$/, "");
+}
+
+function getPublicDomains() {
+  // 需要在 Cloudflare Pages 里配置：NEXT_PUBLIC_CDN_DOMAINS
+  // 例：https://cn.xxx.com,https://global.xxx.com
+  const raw = process.env.NEXT_PUBLIC_CDN_DOMAINS || "";
+  const arr = raw
+    .split(",")
+    .map((x) => normalizeBaseUrl(x))
+    .filter(Boolean);
+  // 去重
+  return Array.from(new Set(arr));
+}
+
+function buildAliasUrl(base, filename) {
+  const b = normalizeBaseUrl(base);
+  return `${b}/api/p/${encodeURIComponent(filename)}`;
+}
+
 export default function Home() {
-  const [selectedFiles, setSelectedFiles] = useState([]); // File[]
-  const [uploadedImages, setUploadedImages] = useState([]); // {id,name,url}[]
+  const [selectedFiles, setSelectedFiles] = useState([]);
+  const [uploadedImages, setUploadedImages] = useState([]);
   const [uploading, setUploading] = useState(false);
 
   const [selectedOption, setSelectedOption] = useState("tgchannel");
   const [isAuthapi, setIsAuthapi] = useState(false);
   const [role, setRole] = useState("");
 
-  // 命名相关：可留空
-  const [customBaseName, setCustomBaseName] = useState(""); // 例如 2026-01-29-000
+  // 命名
+  const [customBaseName, setCustomBaseName] = useState("");
   const [autoDailyName, setAutoDailyName] = useState(true);
 
-  // 为待上传队列创建预览 URL，并在变更/卸载时统一回收，避免内存泄漏
+  // 域名选择（公开链接）
+  const [domainOptions, setDomainOptions] = useState([]);
+  const [selectedDomain, setSelectedDomain] = useState("");
+
+  // 私密链接
+  const [usePrivate, setUsePrivate] = useState(false);
+  const [privateHours, setPrivateHours] = useState(24);
+
   const previewItems = useMemo(() => {
     return selectedFiles.map((file) => ({
       file,
@@ -50,9 +81,7 @@ export default function Home() {
     };
   }, [previewItems]);
 
-  const isImageFile = (file) => {
-    return !!file && typeof file.type === "string" && file.type.startsWith("image/");
-  };
+  const isImageFile = (file) => !!file && typeof file.type === "string" && file.type.startsWith("image/");
 
   const appendFiles = (files) => {
     const arr = Array.from(files || []);
@@ -66,7 +95,7 @@ export default function Home() {
     if (imgFiles.length > 0) setSelectedFiles((prev) => [...prev, ...imgFiles]);
   };
 
-  // 初始化鉴权（移除 IP/总量）
+  // 初始化鉴权
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -92,12 +121,21 @@ export default function Home() {
     initAuth();
   }, []);
 
+  // 初始化域名列表（当前域名 + 预置的多域名）
+  useEffect(() => {
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    const preset = getPublicDomains();
+    const opts = [normalizeBaseUrl(origin), ...preset].filter(Boolean);
+    const dedup = Array.from(new Set(opts));
+    setDomainOptions(dedup);
+    setSelectedDomain(dedup[0] || normalizeBaseUrl(origin));
+  }, []);
+
   // 截图粘贴监听
   useEffect(() => {
     const onPaste = (e) => {
       const items = e.clipboardData?.items || [];
       const blobs = [];
-
       for (let i = 0; i < items.length; i++) {
         const it = items[i];
         if (it?.type && it.type.indexOf("image") !== -1) {
@@ -105,7 +143,6 @@ export default function Home() {
           if (blob && isImageFile(blob)) blobs.push(blob);
         }
       }
-
       if (blobs.length > 0) {
         setSelectedFiles((prev) => [...prev, ...blobs]);
         toast.info("已捕获剪贴板图片");
@@ -132,7 +169,6 @@ export default function Home() {
       const formData = new FormData();
       formData.append("file", f);
 
-      // 命名字段：后端会优先使用 name；没传则自动生成（若 autoDailyName=true）
       if (customBaseName.trim()) formData.append("name", customBaseName.trim());
       formData.append("autoDailyName", autoDailyName ? "true" : "false");
 
@@ -148,24 +184,18 @@ export default function Home() {
           const uploadedFile = {
             id: result?.id || result?.url || `${Date.now()}-${Math.random()}`,
             name: result?.name || f?.name || `img-${Date.now()}.png`,
-            url: result?.url, // 现在后端应返回 /api/p/<filename> 形式
+            // 后端应返回 filename，若没有则从 name 兜底
+            filename: result?.filename || result?.name || f?.name || `img-${Date.now()}.png`,
           };
 
-          if (!uploadedFile.url) {
-            toast.error("上传成功但未返回 URL（后端返回结构异常）");
-          } else {
-            setUploadedImages((prev) => [uploadedFile, ...prev]);
-          }
+          setUploadedImages((prev) => [uploadedFile, ...prev]);
 
-          if (file) {
-            setSelectedFiles((prev) => prev.filter((_, idx) => idx !== index));
-          } else {
-            setSelectedFiles([]);
-          }
+          if (file) setSelectedFiles((prev) => prev.filter((_, idx) => idx !== index));
+          else setSelectedFiles([]);
         } else {
           toast.error(`上传失败: ${result?.message || "未知错误"}`);
         }
-      } catch (e) {
+      } catch (_) {
         toast.error("API通讯错误");
       }
     }
@@ -178,11 +208,23 @@ export default function Home() {
       await navigator.clipboard.writeText(text);
       toast.success("已复制", { autoClose: 800 });
     } catch (_) {
-      toast.error("复制失败（可能不是 HTTPS 或未授权）");
+      toast.error("复制失败");
     }
   };
 
-  // 垂直链接行组件（使用统一外链 /api/p/<filename>）
+  async function getPrivateUrl(filename, base) {
+    const expSeconds = Math.max(1, Number(privateHours || 24)) * 3600;
+    const qs = new URLSearchParams();
+    qs.set("filename", filename);
+    qs.set("expSeconds", String(expSeconds));
+    qs.set("base", base);
+    const res = await fetch(`/api/enableauthapi/sign?${qs.toString()}`);
+    if (!res.ok) throw new Error("sign api failed");
+    const data = await res.json().catch(() => ({}));
+    if (!data?.url) throw new Error("bad sign response");
+    return data.url;
+  }
+
   const LinkRow = ({ label, value }) => (
     <div className="grid grid-cols-4 items-center gap-4 mb-3">
       <span className="col-span-1 text-right text-[12px] font-bold text-slate-500 uppercase tracking-tight">
@@ -214,7 +256,6 @@ export default function Home() {
               </button>
             </Link>
           )}
-
           {isAuthapi ? (
             <LoginButton onClick={() => signOut({ callbackUrl: "/" })}>登出({role})</LoginButton>
           ) : (
@@ -226,7 +267,7 @@ export default function Home() {
       </header>
 
       <div className="mt-20 w-full max-w-4xl p-4">
-        {/* 控制面板（移除 托管总量/您的IP） */}
+        {/* 控制面板 */}
         <div className="bg-white p-6 rounded-2xl shadow-sm mb-6 border">
           <div className="flex justify-between items-center">
             <div>
@@ -240,6 +281,19 @@ export default function Home() {
               >
                 <option value="tgchannel">Telegram 频道</option>
                 <option value="r2">Cloudflare R2</option>
+              </select>
+
+              <select
+                value={selectedDomain}
+                onChange={(e) => setSelectedDomain(e.target.value)}
+                className="border-2 border-slate-50 rounded-xl p-2 bg-slate-50 text-xs font-bold text-slate-600 outline-none"
+                title="选择复制外链域名"
+              >
+                {domainOptions.map((d) => (
+                  <option key={d} value={d}>
+                    {d.replace(/^https?:\/\//, "")}
+                  </option>
+                ))}
               </select>
             </div>
           </div>
@@ -257,15 +311,42 @@ export default function Home() {
               <div className="text-[11px] text-slate-400 mt-1">后端会自动补扩展名（.png/.jpg 等），并写入历史库。</div>
             </div>
 
-            <label className="flex items-center gap-2 bg-slate-50 border rounded-xl p-3">
-              <input
-                type="checkbox"
-                checked={autoDailyName}
-                onChange={(e) => setAutoDailyName(e.target.checked)}
-                className="w-4 h-4"
-              />
-              <span className="text-xs font-bold text-slate-700">自动按天编号命名（YYYY-MM-DD-000）</span>
-            </label>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 bg-slate-50 border rounded-xl p-3">
+                <input
+                  type="checkbox"
+                  checked={autoDailyName}
+                  onChange={(e) => setAutoDailyName(e.target.checked)}
+                  className="w-4 h-4"
+                />
+                <span className="text-xs font-bold text-slate-700">自动按天编号命名</span>
+              </label>
+
+              <label className="flex items-center gap-2 bg-slate-50 border rounded-xl p-3">
+                <input
+                  type="checkbox"
+                  checked={usePrivate}
+                  onChange={(e) => setUsePrivate(e.target.checked)}
+                  className="w-4 h-4"
+                />
+                <span className="text-xs font-bold text-slate-700">复制私密链接（签名）</span>
+              </label>
+
+              {usePrivate && (
+                <div className="bg-slate-50 border rounded-xl p-3">
+                  <div className="text-[11px] font-bold text-slate-600 mb-1">有效期（小时）</div>
+                  <input
+                    type="number"
+                    min={1}
+                    max={720}
+                    value={privateHours}
+                    onChange={(e) => setPrivateHours(e.target.value)}
+                    className="w-full p-2 rounded-lg border bg-white text-sm font-mono outline-none"
+                  />
+                  <div className="text-[11px] text-slate-400 mt-1">仅影响复制出来的私密外链，不影响公开外链。</div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -324,7 +405,7 @@ export default function Home() {
           </button>
         )}
 
-        {/* 首页结果：只保留“展开外链”展示，不再额外提供快捷复制按钮 */}
+        {/* 上传结果展示 */}
         <div className="mt-10 bg-white rounded-[2.5rem] p-10 shadow-sm border border-slate-100 min-h-[240px]">
           <div className="flex justify-between items-center mb-10 border-b pb-4">
             <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
@@ -333,29 +414,22 @@ export default function Home() {
           </div>
 
           <div className="space-y-12">
-            {uploadedImages.length === 0 && (
-              <div className="col-span-full text-center py-20 text-slate-200 italic">暂无记录</div>
-            )}
+            {uploadedImages.length === 0 && <div className="text-center py-20 text-slate-200 italic">暂无记录</div>}
 
             {uploadedImages.map((img, i) => {
-              const aliasUrl = img.url; // 后端返回应为 /api/p/<filename>
-              return (
-                <div
-                  key={img.id || i}
-                  className="relative flex flex-col md:flex-row gap-8 p-6 rounded-3xl border border-slate-50 bg-slate-50/30"
-                >
-                  <div className="w-full md:w-48 h-48 rounded-2xl overflow-hidden shadow-sm border-2 border-white relative">
-                    <img src={aliasUrl} className="w-full h-full object-cover" loading="lazy" alt={img.name || "uploaded"} />
-                  </div>
+              const filename = img.filename || img.name || `file-${i}.png`;
+              const publicUrl = buildAliasUrl(selectedDomain, filename);
 
-                  <div className="flex-1">
-                    <LinkRow label="图片链接" value={aliasUrl} />
-                    <LinkRow label="HTML" value={`<a href="${aliasUrl}" target="_blank"><img src="${aliasUrl}"></a>`} />
-                    <LinkRow label="BBCode" value={`[url=${aliasUrl}][img]${aliasUrl}[/img][/url]`} />
-                    <LinkRow label="Markdown" value={`![image](${aliasUrl})`} />
-                    <LinkRow label="图片URL" value={aliasUrl} />
-                  </div>
-                </div>
+              return (
+                <UploadCard
+                  key={img.id || i}
+                  filename={filename}
+                  publicUrl={publicUrl}
+                  selectedDomain={selectedDomain}
+                  usePrivate={usePrivate}
+                  getPrivateUrl={getPrivateUrl}
+                  LinkRow={LinkRow}
+                />
               );
             })}
           </div>
@@ -367,5 +441,88 @@ export default function Home() {
         <Footer />
       </div>
     </main>
+  );
+}
+
+function makeCodes(url) {
+  return {
+    "图片链接": url,
+    HTML: `<a href="${url}" target="_blank"><img src="${url}"></a>`,
+    BBCode: `[url=${url}][img]${url}[/img][/url]`,
+    Markdown: `![image](${url})`,
+    "图片URL": url,
+  };
+}
+
+function UploadCard({ filename, publicUrl, selectedDomain, usePrivate, getPrivateUrl, LinkRow }) {
+  const [open, setOpen] = useState(true);
+  const [privateUrl, setPrivateUrl] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const codes = useMemo(() => makeCodes(publicUrl), [publicUrl]);
+  const privateCodes = useMemo(() => makeCodes(privateUrl || ""), [privateUrl]);
+
+  useEffect(() => {
+    let mounted = true;
+    async function run() {
+      if (!usePrivate) {
+        setPrivateUrl("");
+        return;
+      }
+      setLoading(true);
+      try {
+        const url = await getPrivateUrl(filename, selectedDomain);
+        if (mounted) setPrivateUrl(url);
+      } catch (_) {
+        if (mounted) setPrivateUrl("");
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    }
+    run();
+    return () => {
+      mounted = false;
+    };
+  }, [usePrivate, filename, selectedDomain, getPrivateUrl]);
+
+  return (
+    <div className="relative flex flex-col md:flex-row gap-8 p-6 rounded-3xl border border-slate-50 bg-slate-50/30">
+      <div className="w-full md:w-48 h-48 rounded-2xl overflow-hidden shadow-sm border-2 border-white relative">
+        <img src={publicUrl} className="w-full h-full object-cover" loading="lazy" alt={filename} />
+      </div>
+
+      <div className="flex-1">
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-sm font-black text-slate-800 truncate">{filename}</div>
+          <button
+            onClick={() => setOpen((v) => !v)}
+            className="px-3 py-1.5 rounded-xl bg-blue-600 text-white text-xs font-black hover:bg-blue-700 transition"
+          >
+            {open ? "收起外链" : "展开外链"}
+          </button>
+        </div>
+
+        {open && (
+          <>
+            {Object.entries(codes).map(([k, v]) => (
+              <LinkRow key={k} label={k} value={v} />
+            ))}
+
+            {usePrivate && (
+              <div className="mt-6 pt-4 border-t">
+                <div className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3">
+                  私密外链（签名）{loading ? "（生成中）" : ""}
+                </div>
+                {privateUrl ? (
+                  Object.entries(privateCodes).map(([k, v]) => <LinkRow key={`p-${k}`} label={k} value={v} />)
+                ) : (
+                  <div className="text-sm text-slate-400">私密链接生成失败（请检查 SIGNING_SECRET 和 sign 接口）</div>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
   );
 }
