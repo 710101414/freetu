@@ -36,6 +36,11 @@ export default function Home() {
   const [isManageMode, setIsManageMode] = useState(false);
   const [selectedImageIds, setSelectedImageIds] = useState([]);
 
+  // 新增：历史拉取（来自 D1 img_log / list API）
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyCursor, setHistoryCursor] = useState(null);
+  const [historyHasMore, setHistoryHasMore] = useState(true);
+
   // 为待上传队列创建预览 URL，并在变更/卸载时统一回收，避免内存泄漏
   const previewItems = useMemo(() => {
     return selectedFiles.map((file) => ({
@@ -46,7 +51,6 @@ export default function Home() {
 
   useEffect(() => {
     return () => {
-      // 回收所有预览 URL
       for (const item of previewItems) {
         try {
           URL.revokeObjectURL(item.previewUrl);
@@ -56,8 +60,11 @@ export default function Home() {
   }, [previewItems]);
 
   const isImageFile = (file) => {
-    // 一般图片 mime 以 image/ 开头
-    return !!file && typeof file.type === "string" && file.type.startsWith("image/");
+    return (
+      !!file &&
+      typeof file.type === "string" &&
+      file.type.startsWith("image/")
+    );
   };
 
   const appendFiles = (files) => {
@@ -98,7 +105,6 @@ export default function Home() {
 
         if (authRes.ok) {
           const authData = await authRes.json();
-          // 更稳健：以 role 存在作为“已鉴权”依据（按你的现有用法）
           if (authData?.role) {
             setIsAuthapi(true);
             setRole(authData.role);
@@ -141,6 +147,52 @@ export default function Home() {
     return () => window.removeEventListener("paste", onPaste);
   }, []);
 
+  // 新增：拉取历史（需要后端提供 /api/enableauthapi/list）
+  const fetchHistory = async ({ reset = false } = {}) => {
+    if (!isAuthapi || role !== "admin") return;
+    if (historyLoading) return;
+
+    setHistoryLoading(true);
+    try {
+      const qs = new URLSearchParams();
+      qs.set("limit", "30");
+      if (!reset && historyCursor) qs.set("cursor", String(historyCursor));
+
+      const res = await fetch(`/api/enableauthapi/list?${qs.toString()}`);
+      if (!res.ok) throw new Error("list api failed");
+
+      const data = await res.json().catch(() => ({}));
+      const items = Array.isArray(data.items) ? data.items : [];
+
+      const mapped = items
+        .filter((x) => x && x.url)
+        .map((x) => ({
+          id: x.id || x.url,
+          name: x.filename || x.name || x.id || x.url,
+          url: x.url,
+        }));
+
+      if (reset) setUploadedImages(mapped);
+      else setUploadedImages((prev) => [...prev, ...mapped]);
+
+      setHistoryCursor(data.nextCursor || null);
+      setHistoryHasMore(Boolean(data.nextCursor));
+    } catch (e) {
+      // 不打断首页，只提示
+      toast.warn("历史库拉取失败（若未创建 list 接口可忽略）");
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  // admin 登录后自动拉一次历史
+  useEffect(() => {
+    if (isAuthapi && role === "admin") {
+      fetchHistory({ reset: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthapi, role]);
+
   const handleUpload = async (file = null, index = null) => {
     if (!isAuthapi || role !== "admin")
       return toast.error("权限不足：请先登录管理员账号");
@@ -180,10 +232,8 @@ export default function Home() {
           }
 
           if (file) {
-            // 删除队列中的对应项（按 index）
             setSelectedFiles((prev) => prev.filter((_, idx) => idx !== index));
           } else {
-            // 批量上传：清空队列
             setSelectedFiles([]);
           }
         } else {
@@ -195,6 +245,11 @@ export default function Home() {
     }
 
     setUploading(false);
+
+    // 上传后刷新历史库（若 list 接口已启用）
+    if (isAuthapi && role === "admin") {
+      fetchHistory({ reset: true });
+    }
   };
 
   const handleDeleteBatch = async () => {
@@ -234,7 +289,6 @@ export default function Home() {
     }
   };
 
-  // 垂直链接行组件
   const LinkRow = ({ label, value }) => (
     <div className="grid grid-cols-4 items-center gap-4 mb-3">
       <span className="col-span-1 text-right text-[12px] font-bold text-slate-500 uppercase tracking-tight">
@@ -259,6 +313,23 @@ export default function Home() {
       <header className="fixed top-0 w-full h-14 bg-white border-b flex items-center justify-between px-6 z-50 shadow-sm">
         <span className="font-bold text-lg text-blue-600">私人图床终端</span>
         <div className="flex items-center">
+          {isAuthapi && role === "admin" && (
+            <>
+              <Link href="/manage">
+                <button className="px-4 py-2 mx-2 bg-slate-100 text-slate-700 rounded-xl font-medium shadow-sm hover:bg-slate-200 transition">
+                  管理库
+                </button>
+              </Link>
+              <button
+                onClick={() => fetchHistory({ reset: true })}
+                className="px-4 py-2 mx-2 bg-slate-100 text-slate-700 rounded-xl font-medium shadow-sm hover:bg-slate-200 transition"
+                disabled={historyLoading}
+              >
+                {historyLoading ? "刷新中..." : "刷新历史"}
+              </button>
+            </>
+          )}
+
           {isAuthapi ? (
             <LoginButton onClick={() => signOut({ callbackUrl: "/" })}>
               登出({role})
@@ -272,7 +343,6 @@ export default function Home() {
       </header>
 
       <div className="mt-20 w-full max-w-4xl p-4">
-        {/* 控制面板 */}
         <div className="bg-white p-6 rounded-2xl shadow-sm mb-6 flex justify-between items-center border">
           <div>
             <h1 className="text-xl font-black text-slate-800 tracking-tighter italic uppercase">
@@ -291,6 +361,7 @@ export default function Home() {
               <option value="tgchannel">Telegram 频道</option>
               <option value="r2">Cloudflare R2</option>
             </select>
+
             <button
               onClick={() => {
                 setIsManageMode(!isManageMode);
@@ -307,7 +378,6 @@ export default function Home() {
           </div>
         </div>
 
-        {/* 待上传队列 */}
         <div
           className="border-4 border-dashed border-slate-200 rounded-[2rem] bg-white p-8 min-h-[160px] flex flex-wrap gap-4 relative transition-all hover:border-blue-300"
           onDragOver={(e) => e.preventDefault()}
@@ -349,7 +419,11 @@ export default function Home() {
 
           {selectedFiles.length === 0 && (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300 pointer-events-none">
-              <FontAwesomeIcon icon={faImages} size="3x" className="mb-2 opacity-10" />
+              <FontAwesomeIcon
+                icon={faImages}
+                size="3x"
+                className="mb-2 opacity-10"
+              />
               <p className="text-sm font-bold">支持 截图粘贴 / 拖拽 / 点击</p>
             </div>
           )}
@@ -374,20 +448,32 @@ export default function Home() {
           </button>
         )}
 
-        {/* Gifyu 风格布局结果展示 */}
         <div className="mt-10 bg-white rounded-[2.5rem] p-10 shadow-sm border border-slate-100 min-h-[400px]">
           <div className="flex justify-between items-center mb-10 border-b pb-4">
             <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
               嵌入代码
             </h2>
-            {isManageMode && (
-              <button
-                onClick={handleDeleteBatch}
-                className="bg-red-50 text-red-600 px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-red-600 hover:text-white transition shadow-sm"
-              >
-                确认删除已选记录 ({selectedImageIds.length})
-              </button>
-            )}
+
+            <div className="flex items-center gap-2">
+              {isManageMode && (
+                <button
+                  onClick={handleDeleteBatch}
+                  className="bg-red-50 text-red-600 px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-red-600 hover:text-white transition shadow-sm"
+                >
+                  确认删除已选记录 ({selectedImageIds.length})
+                </button>
+              )}
+
+              {isAuthapi && role === "admin" && historyHasMore && (
+                <button
+                  onClick={() => fetchHistory({ reset: false })}
+                  className="bg-slate-100 text-slate-700 px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-slate-200 transition shadow-sm"
+                  disabled={historyLoading}
+                >
+                  {historyLoading ? "加载中..." : "加载更多"}
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="space-y-12">
@@ -406,7 +492,6 @@ export default function Home() {
                     : "border-slate-50 bg-slate-50/30"
                 }`}
               >
-                {/* 预览图 */}
                 <div
                   className="w-full md:w-48 h-48 rounded-2xl overflow-hidden shadow-sm border-2 border-white relative cursor-pointer"
                   onClick={() =>
@@ -442,7 +527,6 @@ export default function Home() {
                   )}
                 </div>
 
-                {/* 垂直外链列表 */}
                 <div className="flex-1">
                   <LinkRow label="图片链接" value={img.url} />
                   <LinkRow
