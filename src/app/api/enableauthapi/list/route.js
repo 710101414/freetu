@@ -1,4 +1,3 @@
-// 需要新增：app/api/enableauthapi/list/route.js
 export const runtime = "edge";
 import { getRequestContext } from "@cloudflare/next-on-pages";
 
@@ -13,39 +12,56 @@ export async function GET(request) {
   };
 
   if (!env.IMG) {
-    return Response.json({ message: "数据库未绑定" }, { status: 500, headers: corsHeaders });
+    return Response.json(
+      { message: "数据库未绑定" },
+      { status: 500, headers: corsHeaders }
+    );
   }
 
   try {
     const url = new URL(request.url);
-    const limit = Math.min(parseInt(url.searchParams.get("limit") || "30", 10), 200);
+    const limit = Math.min(
+      parseInt(url.searchParams.get("limit") || "50", 10),
+      200
+    );
     const cursor = url.searchParams.get("cursor"); // created_at 游标
-    const provider = url.searchParams.get("provider"); // 可选：tgchannel / r2
+    const provider = url.searchParams.get("provider"); // tgchannel / r2
 
-    let sql = `SELECT id, url, provider, filename, created_at
-               FROM img_log
-               WHERE 1=1`;
+    let sql = `
+      SELECT id, url, provider, filename, created_at
+      FROM img_log
+      WHERE 1=1
+    `;
     const binds = [];
 
     if (provider) {
-      sql += ` AND provider = ?`;
+      sql += " AND provider = ?";
       binds.push(provider);
     }
 
     if (cursor) {
-      sql += ` AND created_at < ?`;
+      sql += " AND created_at < ?";
       binds.push(Number(cursor));
     }
 
-    sql += ` ORDER BY created_at DESC LIMIT ?`;
+    sql += " ORDER BY created_at DESC LIMIT ?";
     binds.push(limit);
 
-    const res = await env.IMG.prepare(sql).bind(...binds).全部();
-    const items = res?.results || [];
-    const nextCursor = items.length > 0 ? String(items[items.length - 1].created_at) : null;
+    const stmt = env.IMG.prepare(sql);
+    const res = binds.length > 0 ? await stmt.bind(...binds).all() : await stmt.all();
 
-    return Response.json({ items, nextCursor }, { status: 200, headers: corsHeaders });
+    const items = res?.results || [];
+    const nextCursor =
+      items.length > 0 ? String(items[items.length - 1].created_at) : null;
+
+    return Response.json(
+      { items, nextCursor },
+      { status: 200, headers: corsHeaders }
+    );
   } catch (e) {
-    return Response.json({ message: e.message || "list failed" }, { status: 500, headers: corsHeaders });
+    return Response.json(
+      { message: e?.message || "list failed" },
+      { status: 500, headers: corsHeaders }
+    );
   }
 }
