@@ -1,6 +1,15 @@
 export const runtime = "edge";
 import { getRequestContext } from "@cloudflare/next-on-pages";
 
+function sanitizeId(id) {
+  // id 存的是 tg file_id 或 r2 key（已被我们写入时净化过）
+  // 这里再净化一次，防止注入
+  return String(id || "")
+    .trim()
+    .replace(/'/g, "''")
+    .slice(0, 200);
+}
+
 export async function POST(request) {
   const { env } = getRequestContext();
 
@@ -28,28 +37,21 @@ export async function POST(request) {
       });
     }
 
-    // 兼容：既支持删除旧表 imginfo 的记录，也支持删除新表 img_log（管理库用）
-    const placeholders = ids.map(() => "?").join(",");
+    // 兼容 D1：不用 bind，拼接 IN (...)
+    const safeIds = ids.map(sanitizeId).filter(Boolean);
+    if (safeIds.length === 0) {
+      return new Response(JSON.stringify({ error: "ids 无效" }), { status: 400, headers: corsHeaders });
+    }
 
-    // 1) 删除 imginfo（如果你的 imginfo 没有 id 字段，这条会失败，但不会影响后续删除 img_log）
-    try {
-      const sql1 = `DELETE FROM imginfo WHERE id IN (${placeholders})`;
-      await env.IMG.prepare(sql1).bind(...ids).run();
-    } catch (_) {}
+    const inList = safeIds.map((x) => `'${x}'`).join(",");
+    const sql = `DELETE FROM img_log WHERE id IN (${inList})`;
 
-    // 2) 删除 img_log（管理库表）
-    try {
-      const sql2 = `DELETE FROM img_log WHERE id IN (${placeholders})`;
-      await env.IMG.prepare(sql2).bind(...ids).run();
-    } catch (_) {}
+    await env.IMG.prepare(sql).run();
 
-    return new Response(
-      JSON.stringify({ success: true, message: `成功删除 ${ids.length} 条记录` }),
-      {
-        status: 200,
-        headers: corsHeaders,
-      }
-    );
+    return new Response(JSON.stringify({ success: true, message: `成功删除 ${safeIds.length} 条记录` }), {
+      status: 200,
+      headers: corsHeaders,
+    });
   } catch (error) {
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
