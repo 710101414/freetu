@@ -8,177 +8,138 @@ const corsHeaders = {
   "Content-Type": "application/json",
 };
 
-function getExtFromMime(mime) {
-  if (!mime) return "";
-  if (mime.includes("png")) return ".png";
-  if (mime.includes("jpeg") || mime.includes("jpg")) return ".jpg";
-  if (mime.includes("gif")) return ".gif";
-  if (mime.includes("webp")) return ".webp";
-  return "";
-}
-
-function shanghaiYMD() {
-  const now = new Date();
-  const parts = new Intl.DateTimeFormat("zh-CN", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  })
-    .formatToParts(now)
-    .reduce((acc, p) => {
-      acc[p.type] = p.value;
-      return acc;
-    }, {});
-  return `${parts.year}-${parts.month}-${parts.day}`;
-}
-
-function sanitizeBaseName(name) {
-  const s = String(name || "").trim();
-  return s.replace(/[\/\\]/g, "-").replace(/[^a-zA-Z0-9\-_.]/g, "-").slice(0, 120);
-}
-
-async function ensureImgLogTable(envDb) {
-  try {
-    await envDb
-      .prepare(
-        `CREATE TABLE IF NOT EXISTS img_log (
-          id TEXT PRIMARY KEY,
-          url TEXT NOT NULL,
-          provider TEXT NOT NULL,
-          filename TEXT,
-          created_at INTEGER NOT NULL
-        );`
-      )
-      .run();
-    await envDb
-      .prepare(`CREATE INDEX IF NOT EXISTS idx_img_log_created_at ON img_log(created_at DESC);`)
-      .run();
-    await envDb
-      .prepare(`CREATE INDEX IF NOT EXISTS idx_img_log_provider_created_at ON img_log(provider, created_at DESC);`)
-      .run();
-  } catch (_) {}
-}
-
-async function genDailyName(envDb, ext, fallbackBase = "") {
-  const ymd = shanghaiYMD();
-  const sql = `
-    SELECT COUNT(*) AS c
-    FROM img_log
-    WHERE date(created_at/1000, 'unixepoch', 'localtime') = '${ymd}'
-  `;
-  const res = await envDb.prepare(sql).all();
-  const c = Number(res?.results?.[0]?.c || 0);
-  const idx = c + 1;
-  const seq = String(idx).padStart(3, "0");
-  const base = fallbackBase || `${ymd}-${seq}`;
-  return `${base}${ext || ""}`;
-}
-
-async function insertImgLogSafe(envDb, row) {
-  try {
-    await ensureImgLogTable(envDb);
-    const sql = `
-      INSERT INTO img_log (id, url, provider, filename, created_at)
-      VALUES ('${row.id}', '${row.url}', '${row.provider}', '${row.filename}', ${row.created_at})
-    `;
-    await envDb.prepare(sql).run();
-  } catch (_) {}
-}
-
-async function objectExists(bucket, key) {
-  try {
-    const head = await bucket.head(key);
-    return !!head;
-  } catch (_) {
-    return false;
-  }
-}
-
 export async function POST(request) {
   const { env } = getRequestContext();
 
   if (!env.IMGRS) {
-    return new Response(JSON.stringify({ status: 500, message: "IMGRS is not Set", success: false }), {
-      status: 500,
-      headers: corsHeaders,
-    });
+    return Response.json(
+      { status: 500, message: "IMGRS is not Set", success: false },
+      { status: 500, headers: corsHeaders }
+    );
   }
 
   const reqUrl = new URL(request.url);
-  const formData = await request.formData();
+
+  const ip =
+    request.headers.get("x-forwarded-for") ||
+    request.headers.get("x-real-ip") ||
+    null;
+  const clientIp = ip ? ip.split(",")[0].trim() : "IP not found";
+  const referer = request.headers.get("Referer") || "Referer";
+
+  let formData;
+  try {
+    formData = await request.formData();
+  } catch (e) {
+    return Response.json(
+      { status: 400, message: "Invalid form data", success: false },
+      { status: 400, headers: corsHeaders }
+    );
+  }
+
   const file = formData.get("file");
-  if (!file) {
-    return new Response(JSON.stringify({ status: 400, message: "file is required" }), {
-      status: 400,
-      headers: corsHeaders,
-    });
+  if (!file || typeof file.arrayBuffer !== "function") {
+    return Response.json(
+      { status: 400, message: "file is required", success: false },
+      { status: 400, headers: corsHeaders }
+    );
   }
 
-  const mime = file.type || "";
-  const ext = getExtFromMime(mime) || (file.name?.includes(".") ? `.${file.name.split(".").pop()}` : "");
+  const fileType = file.type || "application/octet-stream";
+  const filename = file.name || `upload-${Date.now()}`;
 
-  // 命名：优先用前端传来的 name；否则自动 YYYY-MM-DD-000
-  const wantName = sanitizeBaseName(formData.get("name"));
-  const autoDailyName = String(formData.get("autoDailyName") || "true") === "true";
-
-  let filename = "";
-  if (wantName) {
-    filename = wantName.endsWith(ext) ? wantName : `${wantName}${ext}`;
-  } else if (autoDailyName && env.IMG) {
-    filename = await genDailyName(env.IMG, ext, "");
-  } else {
-    filename = sanitizeBaseName(file.name) || `image${ext}`;
-  }
-
-  // 防覆盖：如同名已存在，追加随机后缀
-  let key = filename;
-  if (await objectExists(env.IMGRS, key)) {
-    const rand = Math.random().toString(16).slice(2, 6);
-    key = filename.replace(ext, `-${rand}${ext}`);
-  }
+  const httpMetadata = {
+    contentType: fileType,
+  };
 
   try {
-    const headers = new Headers();
-    if (mime) headers.set("content-type", mime);
-    headers.set("content-length", `${file.size}`);
+    const putRes = await env.IMGRS.put(filename, file, { httpMetadata });
 
-    const putRes = await env.IMGRS.put(key, file, { httpMetadata: headers });
     if (!putRes) {
-      return new Response(JSON.stringify({ status: 500, message: "R2 put failed", success: false }), {
-        status: 500,
-        headers: corsHeaders,
-      });
+      // 这里不要引用不存在的 error
+      return Response.json(
+        { status: 500, message: "R2 put failed", success: false },
+        { status: 500, headers: corsHeaders }
+      );
     }
 
-    const url = `${reqUrl.origin}/api/rfile/${encodeURIComponent(key)}`;
-    const id = key; // 用 key 作为 id
-    const createdAt = Date.now();
+    const data = {
+      url: `${reqUrl.origin}/api/rfile/${encodeURIComponent(filename)}`,
+      code: 200,
+      name: filename,
+    };
 
-    if (env.IMG) {
-      await insertImgLogSafe(env.IMG, {
-        id: sanitizeBaseName(id),
-        url: sanitizeBaseName(url),
-        provider: "r2",
-        filename: sanitizeBaseName(key),
-        created_at: createdAt,
-      });
+    // 没绑 D1 就只返回外链
+    if (!env.IMG) {
+      return Response.json({ ...data, msg: "no_db" }, { status: 200, headers: corsHeaders });
     }
 
-    return new Response(
-      JSON.stringify({
-        id,
-        url,
-        name: key,
-        code: 200,
-        success: true,
-      }),
-      { status: 200, headers: corsHeaders }
-    );
+    // 绑了 D1：写入旧表 imginfo（保持与你现有结构兼容）
+    try {
+      const ratingIndex = await getRating(env, data.url);
+      const nowTime = await getNowTime();
+      await insertImageData(env.IMG, `/rfile/${filename}`, referer, clientIp, ratingIndex, nowTime);
+      return Response.json(
+        { ...data, msg: "ok", referer, clientIp, ratingIndex, nowTime },
+        { status: 200, headers: corsHeaders }
+      );
+    } catch (e) {
+      // 写库失败也不要炸上传
+      return Response.json(
+        { ...data, msg: "uploaded_but_log_failed", logError: e?.message || String(e) },
+        { status: 200, headers: corsHeaders }
+      );
+    }
   } catch (e) {
-    return new Response(JSON.stringify({ status: 500, message: e.message, success: false }), {
-      status: 500,
-      headers: corsHeaders,
-    });
+    return Response.json(
+      { status: 500, message: e?.message || String(e), success: false },
+      { status: 500, headers: corsHeaders }
+    );
+  }
+}
+
+async function insertImageData(db, src, referer, ip, rating, time) {
+  // ⚠️ 这段仍沿用你旧表 imginfo 的字段结构
+  try {
+    await db
+      .prepare(
+        `INSERT INTO imginfo (url, referer, ip, rating, total, time)
+         VALUES (?, ?, ?, ?, 1, ?)`
+      )
+      .bind(src, referer, ip, rating, time)
+      .run();
+  } catch (_) {}
+}
+
+async function getNowTime() {
+  const options = {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  };
+  const t = new Date();
+  return new Intl.DateTimeFormat("zh-CN", options).format(t);
+}
+
+async function getRating(env, url) {
+  try {
+    const apikey = env.ModerateContentApiKey;
+    const moderateUrl = apikey
+      ? `https://api.moderatecontent.com/moderate/?key=${apikey}&`
+      : "";
+    const ratingApi = env.RATINGAPI ? `${env.RATINGAPI}?` : moderateUrl;
+
+    if (!ratingApi) return 0;
+
+    const res = await fetch(`${ratingApi}url=${encodeURIComponent(url)}`);
+    const data = await res.json().catch(() => ({}));
+    return Object.prototype.hasOwnProperty.call(data, "rating_index") ? data.rating_index : -1;
+  } catch (_) {
+    return -1;
   }
 }
