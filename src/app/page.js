@@ -2,7 +2,7 @@
 import { useState, useRef, useEffect } from "react";
 import { signOut } from "next-auth/react"
 import Image from "next/image";
-import { faImages, faTrashAlt, faUpload, faSearchPlus, faCopy } from '@fortawesome/free-solid-svg-icons';
+import { faImages, faTrashAlt, faUpload, faCopy, faLink } from '@fortawesome/free-solid-svg-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
@@ -24,7 +24,6 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState('preview');
   const [isAuthapi, setIsAuthapi] = useState(false); 
   const [role, setRole] = useState(''); 
-  const [selectedImage, setSelectedImage] = useState(null);
   const parentRef = useRef(null);
 
   useEffect(() => {
@@ -42,20 +41,40 @@ export default function Home() {
           setIsAuthapi(true);
           setRole(authData.role);
         }
-      } catch (err) { console.error("Init Error:", err); }
+      } catch (err) { console.error("初始化失败:", err); }
     };
     initData();
   }, []);
 
+  // --- 核心功能：截图粘贴上传 ---
+  const handlePaste = (event) => {
+    const items = event.clipboardData.items;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf("image") !== -1) {
+        const blob = items[i].getAsFile();
+        setSelectedFiles(prev => [...prev, blob]);
+        toast.info("已读取剪贴板图片");
+      }
+    }
+  };
+
+  const handleDrop = (event) => {
+    event.preventDefault();
+    const files = Array.from(event.dataTransfer.files);
+    if (files.length > 0) {
+      setSelectedFiles(prev => [...prev, ...files]);
+    }
+  };
+
   const handleUpload = async (file = null) => {
     if (!isAuthapi || role !== 'admin') {
-      return toast.error('权限不足：仅管理员允许上传');
+      return toast.error('权限不足：仅限管理员上传');
     }
     setUploading(true);
     const files = file ? [file] : selectedFiles;
     if (files.length === 0) {
       setUploading(false);
-      return toast.error('未选择任何文件');
+      return toast.error('请先选择或粘贴图片');
     }
 
     for (const f of files) {
@@ -63,115 +82,128 @@ export default function Home() {
       formData.append('file', f);
       try {
         const res = await fetch(`/api/enableauthapi/${selectedOption}`, { method: 'POST', body: formData });
+        const result = await res.json();
         if (res.ok) {
-          const result = await res.json();
-          const uploadedFile = { name: f.name, url: result.url, type: f.type };
-          setUploadedImages(prev => [...prev, uploadedFile]);
+          const uploadedFile = { name: f.name || `粘贴图片-${Date.now()}.png`, url: result.url, type: f.type };
+          setUploadedImages(prev => [uploadedFile, ...prev]);
           setSelectedFiles(prev => prev.filter(item => item !== f));
-        } else { toast.error(`上传失败: ${f.name}`); }
-      } catch (e) { toast.error('接口通讯失败'); }
+        } else {
+          toast.error(`上传失败: ${result.message || '服务器内部错误'}`);
+        }
+      } catch (e) { toast.error('接口连接失败，请检查D1数据库绑定'); }
     }
     setUploading(false);
   };
 
   const handleCopy = (text) => {
     navigator.clipboard.writeText(text);
-    toast.info('链接已复制到剪贴板', { autoClose: 1000 });
-  };
-
-  const renderLinks = (img) => {
-    const links = {
-      preview: img.url,
-      markdown: `![${img.name}](${img.url})`,
-      html: `<img src="${img.url}" alt="${img.name}" />`,
-      bbcode: `[img]${img.url}[/img]`
-    };
-    
-    if (activeTab === 'preview') {
-      return (
-        <div className="flex flex-col gap-2 w-full pr-4">
-          <input readOnly value={links.preview} className="text-xs p-2 border rounded bg-white cursor-pointer" onClick={(e) => handleCopy(e.target.value)} />
-          <input readOnly value={links.markdown} className="text-xs p-2 border rounded bg-white cursor-pointer" onClick={(e) => handleCopy(e.target.value)} />
-          <input readOnly value={links.html} className="text-xs p-2 border rounded bg-white cursor-pointer" onClick={(e) => handleCopy(e.target.value)} />
-        </div>
-      );
-    }
-    
-    const formats = { htmlLinks: 'html', markdownLinks: 'markdown', bbcodeLinks: 'bbcode', viewLinks: 'preview' };
-    return <code className="text-[10px] break-all bg-slate-100 p-2 rounded block">{links[formats[activeTab]]}</code>;
+    toast.success('链接已复制', { autoClose: 800 });
   };
 
   return (
-    <main className="min-h-screen bg-slate-50 flex flex-col items-center">
+    <main className="min-h-screen bg-slate-50 flex flex-col items-center pb-20" onPaste={handlePaste}>
       <header className="fixed top-0 w-full h-14 bg-white border-b flex items-center justify-between px-6 z-50 shadow-sm">
-        <span className="font-bold text-lg text-blue-600">我的私人图床</span>
-        {isAuthapi ? <LoginButton onClick={() => signOut()}>退出登录</LoginButton> : <Link href="/login"><LoginButton>管理员登录</LoginButton></Link>}
+        <span className="font-bold text-lg text-blue-600 tracking-tight">私人云端图床</span>
+        {isAuthapi ? <LoginButton onClick={() => signOut()}>退出登录</LoginButton> : <Link href="/login"><LoginButton>管理登录</LoginButton></Link>}
       </header>
 
       <div className="mt-20 w-full max-w-4xl p-4">
-        <div className="bg-white p-6 rounded-2xl shadow-sm mb-6 flex justify-between items-center">
+        <div className="bg-white p-6 rounded-2xl shadow-sm mb-6 flex justify-between items-center border border-slate-100">
           <div>
-            <h1 className="text-2xl font-black text-slate-800">图片上传控制台</h1>
-            <p className="text-sm text-slate-400 mt-1">已托管: <span className="text-blue-500 font-bold">{Total}</span> | 您的IP: {IP}</p>
+            <h1 className="text-2xl font-black text-slate-800">上传控制台</h1>
+            <p className="text-sm text-slate-400 mt-1">总量: <span className="text-blue-500 font-bold">{Total}</span> | 您的IP: {IP}</p>
           </div>
-          <div className="flex flex-col items-end gap-2">
-            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">选择存储通道</span>
-            <select value={selectedOption} onChange={(e) => setSelectedOption(e.target.value)} className="border-2 border-slate-100 rounded-lg p-2 bg-slate-50 outline-none text-sm font-bold text-slate-700 focus:border-blue-500 transition">
+          <div className="flex flex-col items-end gap-1">
+            <span className="text-[10px] font-bold text-slate-300 uppercase">存储接口</span>
+            <select value={selectedOption} onChange={(e) => setSelectedOption(e.target.value)} className="border-2 border-slate-100 rounded-xl p-2 bg-slate-50 outline-none text-sm font-bold text-slate-700 focus:border-blue-500 transition-all">
               <option value="tgchannel">Telegram 频道</option>
               <option value="r2">Cloudflare R2</option>
             </select>
           </div>
         </div>
 
-        <div className="border-4 border-dashed border-slate-200 rounded-3xl bg-white p-8 min-h-[340px] flex flex-wrap gap-6 relative transition-all hover:border-blue-100">
+        <div 
+          className="border-4 border-dashed border-slate-200 rounded-[2rem] bg-white p-8 min-h-[320px] flex flex-wrap gap-6 relative transition-all hover:border-blue-300 hover:bg-blue-50/30"
+          onDrop={handleDrop}
+          onDragOver={(e) => e.preventDefault()}
+        >
           <LoadingOverlay loading={uploading} />
           {selectedFiles.map((f, i) => (
-            <div key={i} className="w-44 h-56 bg-slate-50 border border-slate-100 rounded-2xl p-3 flex flex-col shadow-sm group relative">
-              <div className="h-36 w-full relative overflow-hidden rounded-xl bg-white">
-                {f.type.startsWith('image/') ? <img src={URL.createObjectURL(f)} className="w-full h-full object-cover" /> : <div className="flex items-center justify-center h-full text-xs text-slate-400">视频文件</div>}
+            <div key={i} className="w-40 h-52 bg-white border border-slate-100 rounded-2xl p-3 flex flex-col shadow-sm animate-in fade-in zoom-in duration-300">
+              <div className="h-32 w-full relative overflow-hidden rounded-xl">
+                <img src={URL.createObjectURL(f)} className="w-full h-full object-cover" />
               </div>
-              <div className="mt-auto flex justify-center gap-4">
+              <div className="mt-auto flex justify-center gap-4 pt-2">
                 <button onClick={() => setSelectedFiles(selectedFiles.filter((_, idx) => idx !== i))} className="text-red-400 hover:text-red-600 transition"><FontAwesomeIcon icon={faTrashAlt} /></button>
-                <button onClick={() => handleUpload(f)} className="text-blue-400 hover:text-blue-600 transition"><FontAwesomeIcon icon={faUpload} /></button>
+                <button onClick={() => handleUpload(f)} className="text-blue-500 hover:text-blue-700 transition"><FontAwesomeIcon icon={faUpload} /></button>
               </div>
             </div>
           ))}
-          <input type="file" multiple className="absolute inset-0 opacity-0 cursor-pointer" onChange={(e) => setSelectedFiles(Array.from(e.target.files))} />
           {selectedFiles.length === 0 && (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300 pointer-events-none">
-              <FontAwesomeIcon icon={faImages} size="4x" className="mb-4 opacity-10" />
-              <span className="font-medium">拖拽图片到这里 或 点击此处选择</span>
-              <span className="text-xs mt-2 opacity-60">仅限管理员上传</span>
+              <FontAwesomeIcon icon={faImages} size="4x" className="mb-4 opacity-5" />
+              <span className="font-bold text-slate-400">支持 截图粘贴 / 拖拽上传 / 点击选择</span>
+              <span className="text-xs mt-2 opacity-50">仅限管理员模式上传</span>
             </div>
           )}
+          <input type="file" multiple className="absolute inset-0 opacity-0 cursor-pointer" onChange={(e) => setSelectedFiles(Array.from(e.target.files))} />
         </div>
 
-        <button onClick={() => handleUpload()} className="w-full mt-8 bg-blue-600 text-white py-4 rounded-2xl font-black text-lg hover:bg-blue-700 transition shadow-lg shadow-blue-200 active:scale-[0.98]">开始上传全部</button>
+        <button onClick={() => handleUpload()} className="w-full mt-6 bg-blue-600 text-white py-4 rounded-2xl font-black text-lg shadow-xl shadow-blue-100 hover:bg-blue-700 active:scale-95 transition-all">确认上传全部图片</button>
         
-        <div className="mt-12 bg-white rounded-3xl p-6 shadow-sm mb-20">
-          <div className="flex gap-2 mb-6 border-b border-slate-100 pb-4 overflow-x-auto">
-            {['preview', 'htmlLinks', 'markdownLinks', 'bbcodeLinks', 'viewLinks'].map((tab) => (
-              <button key={tab} onClick={() => setActiveTab(tab)} className={`px-4 py-2 rounded-xl text-xs font-bold transition ${activeTab === tab ? 'bg-blue-500 text-white shadow-md' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>
-                {tab === 'preview' ? '预览' : tab.replace('Links', '').toUpperCase()}
+        <div className="mt-12 bg-white rounded-[2rem] p-8 shadow-sm border border-slate-50">
+          <div className="flex gap-2 mb-8 border-b border-slate-50 pb-4 overflow-x-auto no-scrollbar">
+            {[
+              { id: 'preview', label: '预览视图' },
+              { id: 'url', label: 'URL' },
+              { id: 'markdown', label: 'MARKDOWN' },
+              { id: 'html', label: 'HTML' },
+              { id: 'bbcode', label: 'BBCODE' }
+            ].map((tab) => (
+              <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`px-5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${activeTab === tab.id ? 'bg-blue-500 text-white shadow-lg shadow-blue-100' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>
+                {tab.label}
               </button>
             ))}
           </div>
           
           <div className="space-y-6">
-            {uploadedImages.length === 0 && <p className="text-center text-slate-300 py-10 text-sm italic">暂无上传记录</p>}
+            {uploadedImages.length === 0 && <p className="text-center text-slate-300 py-10 italic text-sm">暂无上传数据</p>}
             {uploadedImages.map((img, i) => (
-              <div key={i} className="flex gap-4 p-2 bg-slate-50 rounded-2xl items-center group">
-                <img src={img.url} className="w-24 h-24 object-cover rounded-xl shadow-sm border-2 border-white" />
-                <div className="flex-1 overflow-hidden">
-                  {renderLinks(img)}
+              <div key={i} className="flex gap-5 p-4 bg-slate-50 rounded-2xl items-center border border-slate-100 group animate-in slide-in-from-bottom-4 duration-500">
+                <img src={img.url} className="w-24 h-24 object-cover rounded-xl shadow-md border-2 border-white" />
+                <div className="flex-1 flex flex-col gap-3 min-w-0">
+                  {activeTab === 'preview' ? (
+                    <>
+                      <div className="flex items-center gap-2 bg-white p-2 rounded-lg border border-slate-200 cursor-pointer hover:border-blue-400 transition" onClick={() => handleCopy(img.url)}>
+                        <FontAwesomeIcon icon={faLink} className="text-blue-500 text-[10px]" />
+                        <span className="text-[10px] truncate text-slate-600 font-mono">{img.url}</span>
+                      </div>
+                      <div className="flex items-center gap-2 bg-white p-2 rounded-lg border border-slate-200 cursor-pointer hover:border-blue-400 transition" onClick={() => handleCopy(`![img](${img.url})`)}>
+                        <FontAwesomeIcon icon={faCopy} className="text-slate-400 text-[10px]" />
+                        <span className="text-[10px] truncate text-slate-400 font-mono">![img]({img.url})</span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="bg-white p-3 border border-slate-200 rounded-xl cursor-pointer hover:border-blue-500 transition-all" onClick={() => handleCopy(
+                      activeTab === 'html' ? `<img src="${img.url}" alt="image" />` :
+                      activeTab === 'markdown' ? `![image](${img.url})` :
+                      activeTab === 'bbcode' ? `[img]${img.url}[/img]` : img.url
+                    )}>
+                      <code className="text-[10px] break-all text-blue-600 font-mono">
+                        {activeTab === 'html' ? `<img src="${img.url}" />` :
+                         activeTab === 'markdown' ? `![img](${img.url})` :
+                         activeTab === 'bbcode' ? `[img]${img.url}[/img]` : img.url}
+                      </code>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
           </div>
         </div>
       </div>
-      <ToastContainer />
-      <div className="fixed bottom-4"><Footer /></div>
+      <ToastContainer position="bottom-right" />
+      <div className="mt-10 opacity-50"><Footer /></div>
     </main>
   );
 }
