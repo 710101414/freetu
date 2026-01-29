@@ -36,7 +36,6 @@ export default function Home() {
   const [isManageMode, setIsManageMode] = useState(false);
   const [selectedImageIds, setSelectedImageIds] = useState([]);
 
-  // 历史拉取
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyCursor, setHistoryCursor] = useState(null);
   const [historyHasMore, setHistoryHasMore] = useState(true);
@@ -307,22 +306,13 @@ export default function Home() {
         <span className="font-bold text-lg text-blue-600">私人图床终端</span>
         <div className="flex items-center">
           {isAuthapi && role === "admin" && (
-            <>
-              {/* 修复：不要跳 /manage（你没创建该页面，会 404）。改成仅提示 */}
-              <button
-                onClick={() => toast.info("管理功能已集成在首页：开启“批量管理模式”即可")}
-                className="px-4 py-2 mx-2 bg-slate-100 text-slate-700 rounded-xl font-medium shadow-sm hover:bg-slate-200 transition"
-              >
-                管理库
-              </button>
-              <button
-                onClick={() => fetchHistory({ reset: true })}
-                className="px-4 py-2 mx-2 bg-slate-100 text-slate-700 rounded-xl font-medium shadow-sm hover:bg-slate-200 transition"
-                disabled={historyLoading}
-              >
-                {historyLoading ? "刷新中..." : "刷新历史"}
-              </button>
-            </>
+            <button
+              onClick={() => fetchHistory({ reset: true })}
+              className="px-4 py-2 mx-2 bg-slate-100 text-slate-700 rounded-xl font-medium shadow-sm hover:bg-slate-200 transition"
+              disabled={historyLoading}
+            >
+              {historyLoading ? "刷新中..." : "刷新历史"}
+            </button>
           )}
 
           {isAuthapi ? (
