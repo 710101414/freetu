@@ -39,11 +39,7 @@ export async function POST(request) {
 
   if (!file) {
     return Response.json(
-      {
-        status: 400,
-        message: "file is required",
-        success: false,
-      },
+      { status: 400, message: "file is required", success: false },
       { status: 400, headers: corsHeaders }
     );
   }
@@ -64,7 +60,7 @@ export async function POST(request) {
       return Response.json(
         {
           status: 404,
-          message: `upload failed`,
+          message: "upload failed",
           success: false,
         },
         {
@@ -95,23 +91,60 @@ export async function POST(request) {
           headers: corsHeaders,
         }
       );
-    } else {
-      const nowTime = await get_nowTime();
+    }
 
+    const nowTime = await get_nowTime();
+
+    try {
+      const rating_index = await getRating(env, imgUrl);
+
+      // 原表：imginfo（保持原项目行为）
+      await insertImageData(
+        env.IMG,
+        `/rfile/${filename}`,
+        Referer,
+        clientIp,
+        rating_index,
+        nowTime
+      );
+
+      // 新表：img_log（用于“管理库”；如果表不存在/字段不匹配，不影响上传）
+      await insertManageLogSafe(
+        env.IMG,
+        filename,
+        imgUrl,
+        "r2",
+        filename,
+        Date.now()
+      );
+
+      return Response.json(
+        {
+          ...data,
+          msg: "2",
+          Referer: Referer,
+          clientIp: clientIp,
+          rating_index: rating_index,
+          nowTime: nowTime,
+        },
+        {
+          status: 200,
+          headers: corsHeaders,
+        }
+      );
+    } catch (error) {
       try {
-        const rating_index = await getRating(env, `${imgUrl}`);
-
-        // 原表：imginfo（保持原项目行为）
         await insertImageData(
           env.IMG,
           `/rfile/${filename}`,
           Referer,
           clientIp,
-          rating_index,
+          -1,
           nowTime
         );
+      } catch (_) {}
 
-        // 新表：img_log（用于“管理库”；如果表不存在/字段不匹配，不影响上传）
+      try {
         await insertManageLogSafe(
           env.IMG,
           filename,
@@ -120,54 +153,17 @@ export async function POST(request) {
           filename,
           Date.now()
         );
+      } catch (_) {}
 
-        return Response.json(
-          {
-            ...data,
-            msg: "2",
-            Referer: Referer,
-            clientIp: clientIp,
-            rating_index: rating_index,
-            nowTime: nowTime,
-          },
-          {
-            status: 200,
-            headers: corsHeaders,
-          }
-        );
-      } catch (error) {
-        try {
-          await insertImageData(
-            env.IMG,
-            `/rfile/${filename}`,
-            Referer,
-            clientIp,
-            -1,
-            nowTime
-          );
-        } catch (_) {}
-
-        try {
-          await insertManageLogSafe(
-            env.IMG,
-            filename,
-            imgUrl,
-            "r2",
-            filename,
-            Date.now()
-          );
-        } catch (_) {}
-
-        return Response.json(
-          {
-            msg: error?.message || "error",
-          },
-          {
-            status: 500,
-            headers: corsHeaders,
-          }
-        );
-      }
+      return Response.json(
+        {
+          msg: error?.message || "error",
+        },
+        {
+          status: 500,
+          headers: corsHeaders,
+        }
+      );
     }
   } catch (error) {
     return Response.json(
@@ -195,15 +191,28 @@ async function insertImageData(envDb, src, referer, ip, rating, time) {
   } catch (error) {}
 }
 
-async function insertManageLogSafe(envDb, id, url, provider, filename, createdAt) {
+async function insertManageLogSafe(
+  envDb,
+  id,
+  url,
+  provider,
+  filename,
+  createdAt
+) {
   try {
     await envDb
-      。prepare(
+      .prepare(
         `INSERT INTO img_log (id, url, provider, filename, created_at)
          VALUES (?, ?, ?, ?, ?)`
       )
-      。bind(String(id), String(url), String(provider), String(filename), Number(createdAt))
-      。run();
+      .bind(
+        String(id),
+        String(url),
+        String(provider),
+        String(filename),
+        Number(createdAt)
+      )
+      .run();
   } catch (e) {}
 }
 
@@ -219,10 +228,7 @@ async function get_nowTime() {
     second: "2-digit",
   };
   const timedata = new Date();
-  const formattedDate = new Intl.DateTimeFormat("zh-CN", options).format(
-    timedata
-  );
-  return formattedDate;
+  return new Intl.DateTimeFormat("zh-CN", options).format(timedata);
 }
 
 async function getRating(env, url) {
@@ -235,16 +241,15 @@ async function getRating(env, url) {
     const ratingApi = env.RATINGAPI ? `${env.RATINGAPI}?` : ModerateContentUrl;
 
     if (ratingApi) {
-      const res = await fetch(`${ratingApi}url=${url}`);
+      const res = await fetch(`${ratingApi}url=${encodeURIComponent(url)}`);
       const data = await res.json();
-      const rating_index = data.hasOwnProperty("rating_index")
+      const rating_index = Object.prototype.hasOwnProperty.call(data, "rating_index")
         ? data.rating_index
         : -1;
-
       return rating_index;
-    } else {
-      return 0;
     }
+
+    return 0;
   } catch (error) {
     return -1;
   }
