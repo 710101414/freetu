@@ -1,12 +1,8 @@
+// 文件：src/app/page.jsx
 "use client";
 import { useState, useEffect, useMemo } from "react";
 import { signOut } from "next-auth/react";
-import {
-  faImages,
-  faCheckSquare,
-  faSquare,
-  faTimesCircle,
-} from "@fortawesome/free-solid-svg-icons";
+import { faImages, faTimesCircle } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
@@ -24,11 +20,10 @@ const LoginButton = ({ onClick, children }) => (
 );
 
 export default function Home() {
-  const [selectedFiles, setSelectedFiles] = useState([]);
-  const [uploadedImages, setUploadedImages] = useState([]);
+  const [selectedFiles, setSelectedFiles] = useState([]); // File[]
+  const [uploadedImages, setUploadedImages] = useState([]); // {id,name,url}[]
   const [uploading, setUploading] = useState(false);
-  const [IP, setIP] = useState("");
-  const [Total, setTotal] = useState("?");
+
   const [selectedOption, setSelectedOption] = useState("tgchannel");
   const [isAuthapi, setIsAuthapi] = useState(false);
   const [role, setRole] = useState("");
@@ -37,6 +32,7 @@ export default function Home() {
   const [customBaseName, setCustomBaseName] = useState(""); // 例如 2026-01-29-000
   const [autoDailyName, setAutoDailyName] = useState(true);
 
+  // 为待上传队列创建预览 URL，并在变更/卸载时统一回收，避免内存泄漏
   const previewItems = useMemo(() => {
     return selectedFiles.map((file) => ({
       file,
@@ -61,6 +57,7 @@ export default function Home() {
   const appendFiles = (files) => {
     const arr = Array.from(files || []);
     const imgFiles = arr.filter(isImageFile);
+
     if (arr.length > 0 && imgFiles.length === 0) {
       toast.warn("检测到非图片文件，已忽略");
       return;
@@ -69,45 +66,33 @@ export default function Home() {
     if (imgFiles.length > 0) setSelectedFiles((prev) => [...prev, ...imgFiles]);
   };
 
+  // 初始化鉴权（移除 IP/总量）
   useEffect(() => {
-    const initData = async () => {
+    const initAuth = async () => {
       try {
-        const [ipRes, totalRes, authRes] = await Promise.all([
-          fetch("/api/ip"),
-          fetch("/api/total"),
-          fetch("/api/enableauthapi/isauth"),
-        ]);
-
-        if (ipRes.ok) {
-          const ipData = await ipRes.json();
-          if (ipData?.ip) setIP(ipData.ip);
+        const res = await fetch("/api/enableauthapi/isauth");
+        if (!res.ok) {
+          setIsAuthapi(false);
+          setRole("");
+          return;
         }
-
-        if (totalRes.ok) {
-          const totalData = await totalRes.json();
-          if (typeof totalData?.total !== "undefined") setTotal(totalData.total);
-        }
-
-        if (authRes.ok) {
-          const authData = await authRes.json();
-          if (authData?.role) {
-            setIsAuthapi(true);
-            setRole(authData.role);
-          } else {
-            setIsAuthapi(false);
-            setRole("");
-          }
+        const data = await res.json();
+        if (data?.role) {
+          setIsAuthapi(true);
+          setRole(data.role);
         } else {
           setIsAuthapi(false);
           setRole("");
         }
-      } catch (err) {
-        console.error("初始化失败:", err);
+      } catch (_) {
+        setIsAuthapi(false);
+        setRole("");
       }
     };
-    initData();
+    initAuth();
   }, []);
 
+  // 截图粘贴监听
   useEffect(() => {
     const onPaste = (e) => {
       const items = e.clipboardData?.items || [];
@@ -120,6 +105,7 @@ export default function Home() {
           if (blob && isImageFile(blob)) blobs.push(blob);
         }
       }
+
       if (blobs.length > 0) {
         setSelectedFiles((prev) => [...prev, ...blobs]);
         toast.info("已捕获剪贴板图片");
@@ -131,8 +117,7 @@ export default function Home() {
   }, []);
 
   const handleUpload = async (file = null, index = null) => {
-    if (!isAuthapi || role !== "admin")
-      return toast.error("权限不足：请先登录管理员账号");
+    if (!isAuthapi || role !== "admin") return toast.error("权限不足：请先登录管理员账号");
 
     setUploading(true);
 
@@ -163,7 +148,7 @@ export default function Home() {
           const uploadedFile = {
             id: result?.id || result?.url || `${Date.now()}-${Math.random()}`,
             name: result?.name || f?.name || `img-${Date.now()}.png`,
-            url: result?.url,
+            url: result?.url, // 现在后端应返回 /api/p/<filename> 形式
           };
 
           if (!uploadedFile.url) {
@@ -193,10 +178,11 @@ export default function Home() {
       await navigator.clipboard.writeText(text);
       toast.success("已复制", { autoClose: 800 });
     } catch (_) {
-      toast.error("复制失败");
+      toast.error("复制失败（可能不是 HTTPS 或未授权）");
     }
   };
 
+  // 垂直链接行组件（使用统一外链 /api/p/<filename>）
   const LinkRow = ({ label, value }) => (
     <div className="grid grid-cols-4 items-center gap-4 mb-3">
       <span className="col-span-1 text-right text-[12px] font-bold text-slate-500 uppercase tracking-tight">
@@ -230,9 +216,7 @@ export default function Home() {
           )}
 
           {isAuthapi ? (
-            <LoginButton onClick={() => signOut({ callbackUrl: "/" })}>
-              登出({role})
-            </LoginButton>
+            <LoginButton onClick={() => signOut({ callbackUrl: "/" })}>登出({role})</LoginButton>
           ) : (
             <Link href="/login">
               <LoginButton>登录管理</LoginButton>
@@ -242,16 +226,11 @@ export default function Home() {
       </header>
 
       <div className="mt-20 w-full max-w-4xl p-4">
-        {/* 控制面板 */}
+        {/* 控制面板（移除 托管总量/您的IP） */}
         <div className="bg-white p-6 rounded-2xl shadow-sm mb-6 border">
           <div className="flex justify-between items-center">
             <div>
-              <h1 className="text-xl font-black text-slate-800 tracking-tighter italic uppercase">
-                Uploader
-              </h1>
-              <p className="text-xs text-slate-400 mt-1">
-                托管总量: {Total} | 您的IP: {IP}
-              </p>
+              <h1 className="text-xl font-black text-slate-800 tracking-tighter italic uppercase">Uploader</h1>
             </div>
             <div className="flex gap-2">
               <select
@@ -275,9 +254,7 @@ export default function Home() {
                 placeholder="例如：2026-01-29-000（留空则自动生成）"
                 className="w-full p-3 rounded-xl bg-slate-50 border text-sm font-mono text-slate-700 outline-none"
               />
-              <div className="text-[11px] text-slate-400 mt-1">
-                后端会自动补扩展名（.png/.jpg 等），并写入历史库。
-              </div>
+              <div className="text-[11px] text-slate-400 mt-1">后端会自动补扩展名（.png/.jpg 等），并写入历史库。</div>
             </div>
 
             <label className="flex items-center gap-2 bg-slate-50 border rounded-xl p-3">
@@ -287,9 +264,7 @@ export default function Home() {
                 onChange={(e) => setAutoDailyName(e.target.checked)}
                 className="w-4 h-4"
               />
-              <span className="text-xs font-bold text-slate-700">
-                自动按天编号命名（YYYY-MM-DD-000）
-              </span>
+              <span className="text-xs font-bold text-slate-700">自动按天编号命名（YYYY-MM-DD-000）</span>
             </label>
           </div>
         </div>
@@ -306,15 +281,8 @@ export default function Home() {
           <LoadingOverlay loading={uploading} />
 
           {previewItems.map((item, i) => (
-            <div
-              key={`${item.previewUrl}-${i}`}
-              className="w-32 h-44 bg-slate-50 rounded-2xl p-2 flex flex-col shadow-sm border relative z-20"
-            >
-              <img
-                src={item.previewUrl}
-                className="h-28 w-full object-cover rounded-xl"
-                alt="preview"
-              />
+            <div key={`${item.previewUrl}-${i}`} className="w-32 h-44 bg-slate-50 rounded-2xl p-2 flex flex-col shadow-sm border relative z-20">
+              <img src={item.previewUrl} className="h-28 w-full object-cover rounded-xl" alt="preview" />
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -325,10 +293,7 @@ export default function Home() {
               >
                 <FontAwesomeIcon icon={faTimesCircle} />
               </button>
-              <button
-                onClick={() => handleUpload(item.file, i)}
-                className="mt-auto text-blue-600 text-[10px] font-bold py-1"
-              >
+              <button onClick={() => handleUpload(item.file, i)} className="mt-auto text-blue-600 text-[10px] font-bold py-1">
                 立即上传
               </button>
             </div>
@@ -345,9 +310,7 @@ export default function Home() {
             type="file"
             multiple
             accept="image/*"
-            className={`absolute inset-0 opacity-0 cursor-pointer ${
-              selectedFiles.length > 0 ? "z-10" : "z-30"
-            }`}
+            className={`absolute inset-0 opacity-0 cursor-pointer ${selectedFiles.length > 0 ? "z-10" : "z-30"}`}
             onChange={(e) => appendFiles(e.target.files)}
           />
         </div>
@@ -361,7 +324,7 @@ export default function Home() {
           </button>
         )}
 
-        {/* 首页展示：保持你原来的 5 外链方式展示 */}
+        {/* 首页结果：只保留“展开外链”展示，不再额外提供快捷复制按钮 */}
         <div className="mt-10 bg-white rounded-[2.5rem] p-10 shadow-sm border border-slate-100 min-h-[240px]">
           <div className="flex justify-between items-center mb-10 border-b pb-4">
             <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
@@ -371,29 +334,30 @@ export default function Home() {
 
           <div className="space-y-12">
             {uploadedImages.length === 0 && (
-              <div className="col-span-full text-center py-20 text-slate-200 italic">
-                暂无记录
-              </div>
+              <div className="col-span-full text-center py-20 text-slate-200 italic">暂无记录</div>
             )}
 
-            {uploadedImages.map((img, i) => (
-              <div
-                key={img.id || i}
-                className="relative flex flex-col md:flex-row gap-8 p-6 rounded-3xl border border-slate-50 bg-slate-50/30"
-              >
-                <div className="w-full md:w-48 h-48 rounded-2xl overflow-hidden shadow-sm border-2 border-white relative">
-                  <img src={img.url} className="w-full h-full object-cover" loading="lazy" alt={img.name || "uploaded"} />
-                </div>
+            {uploadedImages.map((img, i) => {
+              const aliasUrl = img.url; // 后端返回应为 /api/p/<filename>
+              return (
+                <div
+                  key={img.id || i}
+                  className="relative flex flex-col md:flex-row gap-8 p-6 rounded-3xl border border-slate-50 bg-slate-50/30"
+                >
+                  <div className="w-full md:w-48 h-48 rounded-2xl overflow-hidden shadow-sm border-2 border-white relative">
+                    <img src={aliasUrl} className="w-full h-full object-cover" loading="lazy" alt={img.name || "uploaded"} />
+                  </div>
 
-                <div className="flex-1">
-                  <LinkRow label="图片链接" value={img.url} />
-                  <LinkRow label="HTML" value={`<a href="${img.url}" target="_blank"><img src="${img.url}"></a>`} />
-                  <LinkRow label="BBCode" value={`[url=${img.url}][img]${img.url}[/img][/url]`} />
-                  <LinkRow label="Markdown" value={`![image](${img.url})`} />
-                  <LinkRow label="图片URL" value={img.url} />
+                  <div className="flex-1">
+                    <LinkRow label="图片链接" value={aliasUrl} />
+                    <LinkRow label="HTML" value={`<a href="${aliasUrl}" target="_blank"><img src="${aliasUrl}"></a>`} />
+                    <LinkRow label="BBCode" value={`[url=${aliasUrl}][img]${aliasUrl}[/img][/url]`} />
+                    <LinkRow label="Markdown" value={`![image](${aliasUrl})`} />
+                    <LinkRow label="图片URL" value={aliasUrl} />
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>
